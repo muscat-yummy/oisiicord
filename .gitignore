@@ -2,5 +2,5 @@ node_modules/
 data/
 .env
 *.log
-playwright-report/
 test-results/
+playwright-report/
