@@ -2997,3 +2997,246 @@ dialog::backdrop {
   padding: 7px;
   flex-shrink: 0;
 }
+/* Server controls */
+.room-heading {
+  display: flex;
+  align-items: center;
+  min-width: 0;
+  overflow: hidden;
+}
+.room-heading h1 {
+  flex: none;
+}
+#room-topic {
+  max-width: min(42vw, 560px);
+  margin-left: 16px;
+  padding-left: 16px;
+  border-left: 1px solid var(--line);
+  color: var(--muted);
+  font-size: 13px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+#room-topic:empty {
+  display: none;
+}
+.guild-choices {
+  display: grid;
+  gap: 14px;
+  padding: 14px 0 0;
+}
+.guild-choice {
+  display: flex;
+  align-items: center;
+  gap: 18px;
+  width: 100%;
+  min-height: 88px;
+  padding: 18px;
+  text-align: left;
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  transition:
+    background 0.15s,
+    border-color 0.15s,
+    transform 0.15s;
+}
+.guild-choice:hover {
+  border-color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 9%, var(--panel));
+  transform: translateY(-2px);
+}
+.guild-choice:active {
+  transform: scale(0.98);
+}
+.guild-choice strong {
+  flex: 1;
+  font-size: 15px;
+}
+.guild-choice-icon {
+  display: grid;
+  place-items: center;
+  width: 48px;
+  height: 48px;
+  flex: none;
+  color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 14%, transparent);
+  border-radius: 14px;
+}
+.guild-choice-arrow {
+  display: flex;
+  transform: rotate(-90deg);
+  color: var(--muted);
+}
+.invite-options {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 16px;
+  margin: 24px 0;
+}
+.invite-options label {
+  display: grid;
+  gap: 10px;
+  font-size: 13px;
+  font-weight: 600;
+}
+.invite-result {
+  display: grid;
+  gap: 12px;
+  margin-top: 20px;
+}
+.invite-result[hidden] {
+  display: none;
+}
+.invite-result textarea {
+  font-size: 12px;
+  overflow-wrap: anywhere;
+}
+.channel-create-actions {
+  display: flex;
+  gap: 12px;
+  padding-bottom: 22px;
+}
+.channel-create-actions .settings-action {
+  width: auto;
+  border: 1px solid var(--line);
+  padding: 12px 16px;
+}
+.channel-settings-row {
+  padding: 20px 0;
+}
+.channel-settings-row .channel-setting-title {
+  display: flex;
+  gap: 14px;
+  align-items: center;
+}
+.channel-setting-title > svg {
+  flex: none;
+  color: var(--muted);
+}
+.channel-setting-title > div {
+  min-width: 0;
+}
+.channel-setting-title small {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 320px;
+}
+.settings-row > .channel-row-actions {
+  display: flex;
+  gap: 4px;
+  flex: none;
+}
+.settings-row .channel-icon-button {
+  display: grid;
+  place-items: center;
+  padding: 8px;
+  width: 38px;
+  height: 38px;
+  background: transparent;
+  color: var(--muted);
+}
+.settings-row .channel-icon-button:hover {
+  background: var(--line);
+  color: var(--text);
+}
+.settings-row .channel-icon-button:disabled {
+  opacity: 0.2;
+}
+.notification-choice {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 20px;
+  margin-bottom: 12px;
+  cursor: pointer;
+}
+.notification-choice:has(:checked) {
+  border-color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 8%, transparent);
+}
+.notification-choice input {
+  width: 20px;
+  height: 20px;
+  margin: 0;
+  accent-color: var(--accent);
+}
+.audit-entry {
+  display: flex;
+  align-items: flex-start;
+  gap: 14px;
+  padding: 20px 0;
+  border-bottom: 1px solid var(--line);
+}
+.audit-entry > .avatar {
+  width: 38px;
+  height: 38px;
+  font-size: 15px;
+  flex: none;
+}
+.audit-entry > div {
+  display: grid;
+  gap: 6px;
+  min-width: 0;
+}
+.audit-entry strong {
+  font-size: 14px;
+}
+.audit-entry span {
+  font-size: 13px;
+}
+.audit-entry small {
+  color: var(--muted);
+  overflow-wrap: anywhere;
+}
+.audit-entry time {
+  font-size: 11px;
+  color: var(--muted);
+  margin-top: 3px;
+}
+.settings-save {
+  gap: 12px;
+}
+@media (max-width: 650px) {
+  #room-topic {
+    display: none;
+  }
+  .guild-choice {
+    gap: 12px;
+    padding: 14px;
+  }
+  .guild-choice strong {
+    font-size: 14px;
+  }
+  .channel-create-actions {
+    flex-direction: column;
+  }
+  .channel-settings-row {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr);
+    gap: 14px;
+  }
+  .channel-settings-row .channel-setting-title {
+    width: 100%;
+    min-width: 0;
+  }
+  .channel-settings-row .channel-row-actions {
+    margin-left: 0;
+    justify-self: end;
+  }
+  .channel-setting-title small {
+    max-width: 170px;
+  }
+}
+
+:root[data-theme="light"] .range-setting label {
+  color: var(--text);
+}
+:root[data-theme="light"] .theme-choice {
+  color: var(--text);
+  background: var(--panel);
+}

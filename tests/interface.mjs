@@ -157,7 +157,162 @@ try {
   const a = await context(),
     page = await a.newPage();
   await register(page, "interface_alice", "Panda");
-  if (process.env.TEST_UI_FOCUS === "microphone") {
+  if (process.env.TEST_UI_FOCUS === "server") {
+    await page.locator("#profile-settings").click();
+    await page.locator("[data-tab=appearance]").click();
+    assert.equal(
+      await page
+        .getByRole("button", { name: "ライト", exact: true })
+        .textContent(),
+      "ライト",
+    );
+    assert(
+      !(await page.locator("#settings-dialog").innerText()).includes("null"),
+    );
+    await page.getByRole("button", { name: "ライト", exact: true }).click();
+    await screenshot(page, "appearance-fixed");
+    await page.getByRole("button", { name: "ダーク", exact: true }).click();
+    await page
+      .getByRole("button", { name: "設定を閉じる", exact: true })
+      .click();
+    await page.locator("#add-guild").click();
+    await screenshot(page, "server-add");
+    await page
+      .locator(".guild-choice")
+      .filter({ hasText: "サーバーを作成" })
+      .click();
+    await page.locator("#modal-body input").fill("Oisiicord 開発室");
+    await page.locator("#modal-submit").click();
+    await page.locator("#room-name").filter({ hasText: "一般" }).waitFor();
+    async function settings() {
+      await page.locator("#side-menu").click();
+      await page
+        .getByRole("button", { name: "サーバー設定", exact: true })
+        .click();
+    }
+    const area = page.locator(".settings-content"),
+      modal = page.locator("#modal");
+    await settings();
+    assert.equal(
+      await page.locator(".settings-navigation [data-tab]").count(),
+      8,
+    );
+    await page.locator("[data-tab=channels]").click();
+    await page
+      .getByRole("button", { name: "テキストを作成", exact: true })
+      .click();
+    await modal.locator("input").fill("お知らせ");
+    await page.locator("#modal-submit").click();
+    await area
+      .getByRole("button", { name: "お知らせを編集", exact: true })
+      .click();
+    await modal
+      .getByLabel("説明", { exact: true })
+      .fill("アップデート・リリース情報");
+    await page.locator("#modal-submit").click();
+    await area
+      .getByText("アップデート・リリース情報", { exact: true })
+      .waitFor();
+    await area
+      .getByRole("button", { name: "お知らせを上へ", exact: true })
+      .click();
+    await area
+      .getByRole("button", { name: "お知らせを上へ", exact: true })
+      .click();
+    await area
+      .locator(".channel-setting-title strong")
+      .first()
+      .filter({ hasText: "お知らせ" })
+      .waitFor();
+    assert.equal(
+      await area.locator(".channel-setting-title strong").first().textContent(),
+      "お知らせ",
+    );
+    await screenshot(page, "server-channels");
+    await page.locator("[data-tab=general]").click();
+    await area
+      .getByLabel("既定のチャンネル")
+      .selectOption({ label: "# お知らせ" });
+    await area.getByRole("button", { name: "変更を保存", exact: true }).click();
+    await page.locator("[data-tab=notifications]").click();
+    await area.getByRole("radio", { name: "通知しない", exact: true }).check();
+    await page.locator("[data-tab=invites]").click();
+    await area
+      .getByRole("button", { name: "招待リンクを作成", exact: true })
+      .click();
+    await modal.getByLabel("有効期限").selectOption("604800");
+    await modal.getByLabel("利用回数").selectOption("5");
+    await modal
+      .getByRole("button", { name: "リンクを作成", exact: true })
+      .click();
+    await modal.getByLabel("招待リンク", { exact: true }).waitFor();
+    const invite = await modal
+      .getByLabel("招待リンク", { exact: true })
+      .inputValue();
+    assert(invite.includes("#invite="));
+    await screenshot(page, "server-invite");
+    await page.locator("#modal-close").click();
+    await area.getByText(/0 \/ 5 回/).waitFor();
+    await area.getByRole("button", { name: "無効にする", exact: true }).click();
+    await area.getByText("招待リンクはない", { exact: true }).waitFor();
+    await page.locator("[data-tab=audit]").click();
+    await area.getByText("招待リンクを無効化", { exact: true }).waitFor();
+    await screenshot(page, "server-audit");
+    await page
+      .getByRole("button", { name: "設定を閉じる", exact: true })
+      .click();
+    await page.reload();
+    await page.locator("#username").fill("interface_alice");
+    await page.locator("#password").fill("Interface-test-password-2026");
+    await page.locator("#auth-submit").click();
+    await page.locator("#workspace").waitFor({ state: "visible" });
+    await page
+      .getByRole("button", { name: "Oisiicord 開発室", exact: true })
+      .click();
+    await page.locator("#room-name").filter({ hasText: "お知らせ" }).waitFor();
+    assert.equal(
+      await page.locator("#room-topic").textContent(),
+      "アップデート・リリース情報",
+    );
+    await settings();
+    await page.locator("[data-tab=notifications]").click();
+    assert(
+      await area
+        .getByRole("radio", { name: "通知しない", exact: true })
+        .isChecked(),
+    );
+    await page.locator("[data-tab=general]").click();
+    assert.equal(
+      await area
+        .getByLabel("既定のチャンネル")
+        .locator("option:checked")
+        .textContent(),
+      "# お知らせ",
+    );
+    await page.locator("[data-tab=channels]").click();
+    await page.setViewportSize({ width: 390, height: 844 });
+    await screenshot(page, "mobile-server-channels");
+    const channelTitle = await area
+      .locator(".channel-setting-title")
+      .first()
+      .boundingBox();
+    assert(channelTitle.width > 180);
+    assert(
+      await page
+        .locator("#settings-dialog")
+        .evaluate((el) => el.scrollWidth <= el.clientWidth),
+    );
+    await area
+      .getByRole("button", { name: "お知らせを削除", exact: true })
+      .click();
+    await page.locator("#modal-submit").click();
+    await page.locator("[data-tab=general]").click();
+    assert.equal(await area.getByLabel("既定のチャンネル").inputValue(), "");
+    assert.deepEqual(errors, []);
+    console.log(
+      "Server settings, theme labels, invitations, audit history and responsive UI passed",
+    );
+  } else if (process.env.TEST_UI_FOCUS === "microphone") {
     await page.locator("#profile-settings").click();
     await page.locator("[data-tab=voice]").click();
     await page
@@ -187,6 +342,9 @@ try {
     await page.locator("#room-name").filter({ hasText: "一般" }).waitFor();
     await page.locator("#side-menu").click();
     await page.getByRole("button", { name: "友達を招待", exact: true }).click();
+    await page
+      .getByRole("button", { name: "リンクを作成", exact: true })
+      .click();
     const invite = await page.locator("#modal-body textarea").inputValue();
     await page.locator("#modal-close").click();
     const c = await context(),
@@ -383,6 +541,9 @@ try {
       .click();
     await page.locator("#side-menu").click();
     await page.getByRole("button", { name: "友達を招待", exact: true }).click();
+    await page
+      .getByRole("button", { name: "リンクを作成", exact: true })
+      .click();
     const invite = await page.locator("#modal-body textarea").inputValue();
     await page.locator("#modal-close").click();
     const c = await context(),

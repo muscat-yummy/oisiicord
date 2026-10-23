@@ -97,6 +97,9 @@ export function createSettings(ctx) {
       area.append(n("p", { class: "error" }, e.message));
     }
   }
+  async function refreshPage(selected) {
+    if (shell?.open && tab === selected) await navigate(selected);
+  }
   function open(which, initial) {
     lastFocus = document.activeElement;
     mode = which;
@@ -130,9 +133,13 @@ export function createSettings(ctx) {
           ]
         : [
             ["overview", "サーバープロフィール", "image"],
+            ["general", "基本設定", "settings"],
+            ["notifications", "通知設定", "bell"],
             ["members", "メンバー", "users"],
             ["channels", "チャンネル", "hash"],
             ["invites", "招待", "link"],
+            ["audit", "操作履歴", "history"],
+            ["info", "サーバー情報", "info"],
           ];
     const nav = n(
       "nav",
@@ -147,6 +154,12 @@ export function createSettings(ctx) {
       ),
     );
     for (const [key, label, ic] of items) {
+      if (
+        mode === "server" &&
+        ctx.getGuild().owner !== ctx.getMe().id &&
+        ["invites", "audit"].includes(key)
+      )
+        continue;
       const el = action(label, () => navigate(key), ic);
       el.dataset.tab = key;
       nav.append(el);
@@ -369,8 +382,8 @@ export function createSettings(ctx) {
         item.append(
           n("span", { class: "theme-preview" }, n("i"), n("i"), n("i")),
           n("span", {}, label),
-          preferences().theme === value ? icon("check", 18) : null,
         );
+        if (preferences().theme === value) item.append(icon("check", 18));
         themes.append(item);
       }
       const colors = n("div", { class: "accent-colors" });
@@ -804,7 +817,7 @@ export function createSettings(ctx) {
               );
               await ctx.refresh();
               toast("保存した");
-              await navigate("overview");
+              await refreshPage("overview");
             } finally {
               save.disabled = false;
             }
@@ -877,7 +890,7 @@ export function createSettings(ctx) {
                           await ctx.updateRoster(
                             g.roster.members.filter((x) => x.id !== m.id),
                           );
-                          navigate("members");
+                          refreshPage("members");
                         },
                         "削除",
                       ),
@@ -888,77 +901,221 @@ export function createSettings(ctx) {
         );
       }
     }
-    if (selected === "channels") {
-      area.append(heading("チャンネル"));
-      for (const r of g.channels) {
-        const title = n(
-          "div",
-          { class: "channel-setting-title" },
-          icon(r.kind === "voice" ? "volume" : "hash", 22),
-          n("span", {}, r.name),
-        );
-        const controls = owner
-          ? [
-              b("編集", () =>
-                ctx.prompt("チャンネル名", "名前", r.name, async (name) => {
-                  await api("/rooms/" + r.id, { name }, "PATCH");
-                  await ctx.refresh();
-                  navigate("channels");
-                }),
-              ),
-              b(
-                "削除",
-                () =>
-                  ctx.modal(
-                    "チャンネルを削除",
-                    n("p", {}, r.name),
-                    async () => {
-                      await api("/rooms/" + r.id, {}, "DELETE");
-                      await ctx.refresh();
-                      navigate("channels");
-                    },
-                    "削除",
-                  ),
-                "danger",
-              ),
-            ]
-          : [];
-        area.append(n("div", { class: "settings-row" }, title, ...controls));
-      }
+    if (selected === "general") {
+      area.append(heading("基本設定"));
+      const channel = n(
+        "select",
+        { "aria-label": "既定のチャンネル" },
+        n("option", { value: "" }, "先頭のテキストチャンネル"),
+        ...g.channels
+          .filter((r) => r.kind === "text")
+          .map((r) => n("option", { value: r.id }, "# " + r.name)),
+      );
+      channel.value = profile.defaultChannel ?? "";
+      channel.disabled = !owner;
+      area.append(field("既定のチャンネル", channel));
       if (owner)
         area.append(
           n(
             "div",
-            { class: "buttons" },
+            { class: "settings-save" },
+            b("リセット", () => refreshPage("general")),
             b(
-              "テキストチャンネルを作成",
-              () => ctx.newChannel("text"),
+              "変更を保存",
+              async () => {
+                await api(
+                  "/guilds/" + g.id,
+                  { defaultChannel: channel.value || null },
+                  "PATCH",
+                );
+                await ctx.refresh();
+                toast("保存した");
+                await refreshPage("general");
+              },
               "primary",
             ),
-            b("ボイスチャンネルを作成", () => ctx.newChannel("voice")),
           ),
         );
     }
-    if (selected === "invites") {
-      area.append(heading("招待"));
-      if (!owner) {
+    if (selected === "notifications") {
+      area.append(heading("通知設定"));
+      const current = preferences().guildNotifications?.[g.id] ?? "all";
+      for (const [value, label] of [
+        ["all", "すべてのメッセージ"],
+        ["silent", "通知しない"],
+      ]) {
+        const radio = input(value, {
+          type: "radio",
+          name: "guild-notification",
+          "aria-label": label,
+        });
+        radio.checked = current === value;
+        radio.onchange = () =>
+          updatePreferences({
+            guildNotifications: {
+              ...preferences().guildNotifications,
+              [g.id]: value,
+            },
+          });
         area.append(
-          n("p", { class: "empty" }, "招待はサーバーの所有者が作成できる"),
-        );
-        return;
-      }
-      area.append(
-        action("招待リンクを作成", ctx.inviteDialog, "link"),
-        n("div", { class: "settings-nav-divider" }),
-      );
-      const invites = await api("/guilds/" + g.id + "/invites");
-      for (const invite of invites)
-        area.append(
-          row(
-            "招待リンク",
-            "有効期限 " + new Date(invite.expires).toLocaleString("ja-JP"),
+          n(
+            "label",
+            { class: "notification-choice" },
+            radio,
+            n("span", {}, label),
           ),
         );
+      }
+    }
+    if (selected === "channels") {
+      area.append(heading("チャンネル"));
+      if (owner)
+        area.append(
+          n(
+            "div",
+            { class: "channel-create-actions" },
+            action(
+              "テキストを作成",
+              async () => {
+                await ctx.newChannel("text", () => refreshPage("channels"));
+              },
+              "hash",
+            ),
+            action(
+              "ボイスを作成",
+              async () => {
+                await ctx.newChannel("voice", () => refreshPage("channels"));
+              },
+              "volume",
+            ),
+          ),
+        );
+      const move = async (index, delta) => {
+        const enabled = [...area.querySelectorAll("button:not(:disabled)")];
+        enabled.forEach((el) => (el.disabled = true));
+        try {
+          const ids = g.channels.map((r) => r.id);
+          [ids[index], ids[index + delta]] = [ids[index + delta], ids[index]];
+          await api("/guilds/" + g.id + "/channelorder", { ids });
+          await ctx.refresh();
+          await refreshPage("channels");
+        } finally {
+          enabled.forEach((el) => {
+            if (el.isConnected) el.disabled = false;
+          });
+        }
+      };
+      g.channels.forEach((r, index) => {
+        const title = n(
+          "div",
+          { class: "channel-setting-title" },
+          icon(r.kind === "voice" ? "volume" : "hash", 24),
+          n(
+            "div",
+            {},
+            n("strong", {}, r.name),
+            r.topic ? n("small", {}, r.topic) : null,
+          ),
+        );
+        const controls = n("div", { class: "channel-row-actions" });
+        const control = (label, ic, fn, disabled = false) => {
+          const el = b("", fn, "channel-icon-button");
+          el.append(icon(ic, 20));
+          el.setAttribute("aria-label", label);
+          el.title = label;
+          el.disabled = disabled;
+          controls.append(el);
+        };
+        if (owner) {
+          control(r.name + "を上へ", "up", () => move(index, -1), index === 0);
+          control(
+            r.name + "を下へ",
+            "down",
+            () => move(index, 1),
+            index === g.channels.length - 1,
+          );
+          control(r.name + "を編集", "edit", () => {
+            const name = input(r.name, { maxlength: 60, required: true }),
+              topic = n(
+                "textarea",
+                { rows: 3, maxlength: 1024 },
+                r.topic ?? "",
+              );
+            ctx.modal(
+              "チャンネルを編集",
+              [field("チャンネル名", name), field("説明", topic)],
+              async () => {
+                await api(
+                  "/rooms/" + r.id,
+                  { name: name.value, topic: topic.value },
+                  "PATCH",
+                );
+                await ctx.refresh();
+                await refreshPage("channels");
+              },
+            );
+          });
+          control(r.name + "を削除", "trash", () =>
+            ctx.modal(
+              "チャンネルを削除",
+              n("p", {}, r.name),
+              async () => {
+                await api("/rooms/" + r.id, {}, "DELETE");
+                await ctx.refresh();
+                await refreshPage("channels");
+              },
+              "削除",
+            ),
+          );
+        }
+        area.append(
+          n(
+            "div",
+            { class: "settings-row channel-settings-row" },
+            title,
+            controls,
+          ),
+        );
+      });
+    }
+    if (selected === "invites") {
+      area.append(heading("招待"));
+      if (!owner) return;
+      area.append(
+        action(
+          "招待リンクを作成",
+          () => ctx.inviteDialog(() => refreshPage("invites")),
+          "link",
+        ),
+      );
+      const invites = await api("/guilds/" + g.id + "/invites");
+      for (const invite of invites) {
+        const expired = invite.expires && invite.expires <= Date.now(),
+          full = invite.maxUses && invite.uses >= invite.maxUses;
+        area.append(
+          row(
+            expired ? "期限切れ" : full ? "利用上限に到達" : "招待リンク",
+            (invite.expires
+              ? new Date(invite.expires).toLocaleString("ja-JP")
+              : "期限なし") +
+              " · " +
+              invite.uses +
+              " / " +
+              (invite.maxUses || "無制限") +
+              " 回",
+            [
+              b(
+                "無効にする",
+                async () => {
+                  await api("/guilds/" + g.id + "/revoke", { id: invite.id });
+                  await refreshPage("invites");
+                },
+                "danger",
+              ),
+            ],
+          ),
+        );
+      }
       if (invites.length)
         area.append(
           b(
@@ -969,16 +1126,101 @@ export function createSettings(ctx) {
                 n("p", {}, invites.length + "件の招待リンク"),
                 async () => {
                   await api("/guilds/" + g.id + "/invites", {}, "DELETE");
-                  navigate("invites");
+                  await refreshPage("invites");
                 },
                 "無効にする",
               ),
             "danger",
           ),
         );
-      else area.append(n("p", { class: "empty" }, "有効な招待はない"));
+      else area.append(n("p", { class: "empty" }, "招待リンクはない"));
+    }
+    if (selected === "audit") {
+      area.append(heading("操作履歴"));
+      if (!owner) return;
+      const labels = {
+        "server.update": "サーバー設定を変更",
+        "channel.create": "チャンネルを作成",
+        "channel.update": "チャンネルを変更",
+        "channel.delete": "チャンネルを削除",
+        "channel.order": "チャンネルを並べ替え",
+        "invite.create": "招待リンクを作成",
+        "invite.revoke": "招待リンクを無効化",
+        "invite.revokeAll": "すべての招待を無効化",
+        "member.add": "メンバーを追加",
+        "member.remove": "メンバーを削除",
+        "member.reject": "参加申請を却下",
+      };
+      const list = n("div", { class: "audit-list" });
+      area.append(list);
+      let before = "",
+        active = true;
+      cleanup = () => {
+        active = false;
+      };
+      const more = b("さらに表示", () => load());
+      area.append(more);
+      async function load() {
+        more.disabled = true;
+        try {
+          const entries = await api(
+            "/guilds/" + g.id + "/audit" + (before ? "?before=" + before : ""),
+          );
+          if (!active) return;
+          for (const entry of entries)
+            list.append(
+              n(
+                "div",
+                { class: "audit-entry" },
+                ctx.avatar(entry.actor),
+                n(
+                  "div",
+                  {},
+                  n("strong", {}, entry.actor.display),
+                  n("span", {}, labels[entry.action] ?? entry.action),
+                  entry.target ? n("small", {}, entry.target) : null,
+                  n(
+                    "time",
+                    { dateTime: new Date(entry.created).toISOString() },
+                    new Date(entry.created).toLocaleString("ja-JP"),
+                  ),
+                ),
+              ),
+            );
+          before = entries.at(-1)?.id ?? before;
+          more.hidden = entries.length < 50;
+          if (!list.children.length)
+            list.append(n("p", { class: "empty" }, "操作履歴はない"));
+        } finally {
+          more.disabled = false;
+        }
+      }
+      await load();
+    }
+    if (selected === "info") {
+      area.append(
+        heading("サーバー情報"),
+        row("サーバー名", g.name),
+        row("所有者", ctx.getUser(g.owner).display),
+        row("メンバー", g.roster.members.length + "人"),
+        row(
+          "テキストチャンネル",
+          String(g.channels.filter((r) => r.kind === "text").length),
+        ),
+        row(
+          "ボイスチャンネル",
+          String(g.channels.filter((r) => r.kind === "voice").length),
+        ),
+        row("サーバーID", g.id, [
+          b("コピー", async () => {
+            await navigator.clipboard.writeText(g.id);
+            toast("コピーした");
+          }),
+        ]),
+      );
     }
   }
+
   return {
     user: (initial = "account") => open("user", initial),
     server: (initial = "overview") => open("server", initial),

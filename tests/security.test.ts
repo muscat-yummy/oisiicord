@@ -654,3 +654,177 @@ test("password changes preserve identity and invalidate the old authentication s
   ).toBe(200);
   expect((await request(alice, "/state")).body.me.keys).toEqual(alice.keys);
 });
+
+test("server channel settings persist, order validation is scoped, and deleted defaults clear", async () => {
+  const created = await request(alice, `/guilds/${guild}/channels`, {
+    name: "announcements",
+    kind: "text",
+    topic: "Release notes",
+  });
+  expect(created.status).toBe(200);
+  const channel = created.body.id;
+  expect(
+    (
+      await request(
+        alice,
+        `/rooms/${channel}`,
+        { topic: "Updated topic" },
+        "PATCH",
+      )
+    ).status,
+  ).toBe(200);
+  expect(
+    (
+      await request(mallory, `/guilds/${guild}/channelorder`, {
+        ids: [channel],
+      })
+    ).status,
+  ).toBe(403);
+  let data = (await request(alice, "/state")).body.guilds.find(
+    (g: any) => g.id === guild,
+  );
+  const ids = data.channels.map((r: any) => r.id).reverse();
+  expect(
+    (
+      await request(alice, `/guilds/${guild}/channelorder`, {
+        ids: [channel, channel],
+      })
+    ).status,
+  ).toBe(400);
+  expect(
+    (
+      await request(alice, `/guilds/${guild}/channelorder`, {
+        ids: [...ids.slice(1), dm],
+      })
+    ).status,
+  ).toBe(400);
+  expect(
+    (await request(alice, `/guilds/${guild}/channelorder`, { ids })).status,
+  ).toBe(200);
+  expect(
+    (
+      await request(
+        alice,
+        `/guilds/${guild}`,
+        { defaultChannel: channel },
+        "PATCH",
+      )
+    ).status,
+  ).toBe(200);
+  expect(
+    (
+      await request(
+        alice,
+        `/guilds/${guild}`,
+        { description: "Server description" },
+        "PATCH",
+      )
+    ).status,
+  ).toBe(200);
+  data = (await request(alice, "/state")).body.guilds.find(
+    (g: any) => g.id === guild,
+  );
+  expect(data.channels.map((r: any) => r.id)).toEqual(ids);
+  expect(data.channels.find((r: any) => r.id === channel).topic).toBe(
+    "Updated topic",
+  );
+  expect(data.profile.defaultChannel).toBe(channel);
+  expect(
+    (await request(alice, `/guilds/${guild}`, { defaultChannel: dm }, "PATCH"))
+      .status,
+  ).toBe(400);
+  expect(
+    (
+      await request(
+        alice,
+        `/rooms/${channel}`,
+        { topic: "x".repeat(1025) },
+        "PATCH",
+      )
+    ).status,
+  ).toBe(400);
+  expect((await request(alice, `/rooms/${channel}`, {}, "DELETE")).status).toBe(
+    200,
+  );
+  expect(
+    (await request(alice, "/state")).body.guilds.find(
+      (g: any) => g.id === guild,
+    ).profile.defaultChannel,
+  ).toBe(null);
+});
+
+test("limited invitations count distinct requests atomically and can be revoked individually", async () => {
+  const applicant = await register("invite_applicant"),
+    second = await register("invite_second");
+  const created = await request(alice, `/guilds/${guild}/invites`, {
+    expiresIn: 0,
+    maxUses: 1,
+  });
+  expect(created.status).toBe(200);
+  expect(created.body.expires).toBe(null);
+  const token = created.body.token;
+  const results = await Promise.all([
+    request(applicant, `/guilds/${guild}/join`, { token }),
+    request(applicant, `/guilds/${guild}/join`, { token }),
+  ]);
+  expect(results.map((r) => r.status)).toEqual([200, 200]);
+  expect(
+    (await request(second, `/guilds/${guild}/join`, { token })).status,
+  ).toBe(403);
+  let invites = (await request(alice, `/guilds/${guild}/invites`)).body;
+  const limited = invites.find((i: any) => i.maxUses === 1);
+  expect(limited.uses).toBe(1);
+  expect(limited.expires).toBe(null);
+  expect(
+    (await request(mallory, `/guilds/${guild}/revoke`, { id: limited.id }))
+      .status,
+  ).toBe(403);
+  expect(
+    (await request(alice, `/guilds/${guild}/revoke`, { id: limited.id }))
+      .status,
+  ).toBe(200);
+  expect(
+    (await request(applicant, `/guilds/${guild}/join`, { token })).status,
+  ).toBe(403);
+  const expiring = await request(alice, `/guilds/${guild}/invites`, {
+    expiresIn: 3600,
+    maxUses: 5,
+  });
+  expect(expiring.body.expires).toBeGreaterThan(Date.now());
+  const expiringID = (
+    await request(alice, `/guilds/${guild}/invites`)
+  ).body.find((i: any) => i.maxUses === 5).id;
+  app.db
+    .query("UPDATE invites SET expires=? WHERE hash=?")
+    .run(Date.now() - 1, expiringID);
+  expect(
+    (
+      await request(second, `/guilds/${guild}/join`, {
+        token: expiring.body.token,
+      })
+    ).status,
+  ).toBe(403);
+  expect(
+    (await request(alice, `/guilds/${guild}/invites`, { expiresIn: -1 }))
+      .status,
+  ).toBe(400);
+  expect(
+    (await request(alice, `/guilds/${guild}/invites`, { maxUses: "1" })).status,
+  ).toBe(400);
+  const audit = await request(alice, `/guilds/${guild}/audit`);
+  expect(audit.status).toBe(200);
+  expect(audit.body.some((e: any) => e.action === "invite.revoke")).toBe(true);
+  expect(audit.body.some((e: any) => e.action === "channel.update")).toBe(true);
+  expect(JSON.stringify(audit.body)).not.toContain(token);
+  expect(JSON.stringify(audit.body)).not.toContain(limited.id);
+  expect((await request(mallory, `/guilds/${guild}/audit`)).status).toBe(403);
+  const before = audit.body[0].id;
+  expect(
+    (
+      await request(alice, `/guilds/${guild}/audit?before=${before}`)
+    ).body.every((e: any) => e.id < before),
+  ).toBe(true);
+  expect(
+    (await request(alice, `/guilds/${guild}/audit?before=oops`)).status,
+  ).toBe(400);
+});

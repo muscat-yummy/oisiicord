@@ -95,7 +95,7 @@ export function createApp(
     if (!session) return fail(401, "ログインが必要");
     return session as Row;
   }
-  const user = (id: string) => {
+  const user = (id: string): Row => {
     const row = one(
       "SELECT id,username,display,keys FROM users WHERE id=?",
       id,
@@ -136,6 +136,27 @@ export function createApp(
       all("SELECT user FROM members WHERE guild=?", guild).map((x) => x.user),
       { type: "state" },
     );
+  }
+  function audit(guild: string, actor: string, action: string, target = "") {
+    run(
+      "INSERT INTO guild_audit(guild,actor,action,target,created) VALUES(?,?,?,?,?)",
+      guild,
+      actor,
+      action,
+      target,
+      Date.now(),
+    );
+  }
+  function channels(guild: string) {
+    return all(
+      "SELECT r.*,COALESCE(p.topic,'') AS topic,COALESCE(p.position,r.rowid) AS position FROM rooms r LEFT JOIN room_preferences p ON p.room=r.id WHERE r.guild=? ORDER BY position,r.rowid",
+      guild,
+    );
+  }
+  function topic(value: unknown) {
+    if (typeof value !== "string" || value.length > 1024)
+      fail(400, "説明は1024文字まで");
+    return value as string;
   }
   function owner(guild: string, uid: string) {
     const g = one("SELECT * FROM guilds WHERE id=?", guild);
@@ -249,7 +270,7 @@ export function createApp(
         one("SELECT data FROM guild_profiles WHERE guild=?", g.id)?.data ??
           "{}",
       ),
-      channels: all("SELECT * FROM rooms WHERE guild=? ORDER BY rowid", g.id),
+      channels: channels(g.id),
       requests:
         g.owner === uid
           ? all("SELECT user FROM requests WHERE guild=?", g.id).map((x) =>
@@ -638,43 +659,123 @@ export function createApp(
         action = m[2];
       if (action === "join" && method === "POST") {
         const b = await json(req);
-        if (
-          !one(
-            "SELECT 1 FROM invites WHERE hash=? AND guild=? AND expires>?",
+        db.transaction(() => {
+          const invite = one(
+            "SELECT i.*,COALESCE(s.max_uses,0) AS maxUses,COALESCE(s.uses,0) AS uses FROM invites i LEFT JOIN invite_settings s ON s.invite=i.hash WHERE i.hash=? AND i.guild=? AND i.expires>?",
             sha(text(b.token, 100)),
             gid,
             Date.now(),
+          );
+          if (!invite) return fail(403, "招待が無効または期限切れ");
+          if (
+            one("SELECT 1 FROM members WHERE guild=? AND user=?", gid, uid) ||
+            one("SELECT 1 FROM requests WHERE guild=? AND user=?", gid, uid)
           )
-        )
-          fail(403, "招待が無効または期限切れ");
-        if (!one("SELECT 1 FROM members WHERE guild=? AND user=?", gid, uid))
-          run("INSERT OR IGNORE INTO requests VALUES(?,?)", gid, uid);
+            return;
+          if (invite.maxUses && invite.uses >= invite.maxUses)
+            fail(403, "招待の利用回数が上限に達した");
+          run("INSERT INTO requests VALUES(?,?)", gid, uid);
+          run(
+            "INSERT INTO invite_settings VALUES(?,?,1) ON CONFLICT(invite) DO UPDATE SET uses=uses+1",
+            invite.hash,
+            invite.maxUses,
+          );
+        })();
         const g = one("SELECT owner,name FROM guilds WHERE id=?", gid)!;
         emitUsers([g.owner], { type: "state" });
         return response({ name: g.name });
       }
       const g = owner(gid, uid);
+      if (action === "audit" && method === "GET") {
+        const before = Number(
+          url.searchParams.get("before") ?? Number.MAX_SAFE_INTEGER,
+        );
+        if (!Number.isSafeInteger(before) || before <= 0)
+          fail(400, "カーソルが不正");
+        return response(
+          all(
+            "SELECT id,actor,action,target,created FROM guild_audit WHERE guild=? AND id<? ORDER BY id DESC LIMIT 50",
+            gid,
+            before,
+          ).map((entry) => ({ ...entry, actor: user(entry.actor) })),
+        );
+      }
       if (action === "invites" && method === "GET")
         return response(
           all(
-            "SELECT hash AS id,expires FROM invites WHERE guild=? AND expires>?",
+            "SELECT i.hash AS id,i.expires,COALESCE(s.max_uses,0) AS maxUses,COALESCE(s.uses,0) AS uses FROM invites i LEFT JOIN invite_settings s ON s.invite=i.hash WHERE i.guild=? ORDER BY i.rowid DESC",
             gid,
-            Date.now(),
-          ),
+          ).map((i) => ({
+            ...i,
+            expires: i.expires === 32503680000000 ? null : i.expires,
+          })),
         );
       if (action === "invites" && method === "POST") {
-        const token = crypto.getRandomValues(new Uint8Array(32));
-        const value = Buffer.from(token).toString("base64url");
-        run(
-          "INSERT INTO invites VALUES(?,?,?)",
-          sha(value),
-          gid,
-          Date.now() + 86400000,
-        );
-        return response({ token: value });
+        const b = await json(req),
+          seconds = b.expiresIn ?? 86400,
+          maxUses = b.maxUses ?? 0;
+        if (
+          ![0, 3600, 86400, 604800].includes(seconds) ||
+          ![0, 1, 5, 10, 25, 100].includes(maxUses)
+        )
+          fail(400, "招待の設定が不正");
+        const value = Buffer.from(
+            crypto.getRandomValues(new Uint8Array(32)),
+          ).toString("base64url"),
+          id = sha(value),
+          expires = seconds ? Date.now() + seconds * 1000 : 32503680000000;
+        db.transaction(() => {
+          run("INSERT INTO invites VALUES(?,?,?)", id, gid, expires);
+          run("INSERT INTO invite_settings VALUES(?,?,0)", id, maxUses);
+          audit(gid, uid, "invite.create");
+        })();
+        return response({
+          token: value,
+          expires: seconds ? expires : null,
+          maxUses,
+        });
+      }
+      if (action === "revoke" && method === "POST") {
+        const b = await json(req);
+        if (
+          typeof b.id !== "string" ||
+          !one("SELECT 1 FROM invites WHERE hash=? AND guild=?", b.id, gid)
+        )
+          fail(404, "招待がない");
+        db.transaction(() => {
+          run("DELETE FROM invites WHERE hash=? AND guild=?", b.id, gid);
+          audit(gid, uid, "invite.revoke");
+        })();
+        return response({ ok: true });
       }
       if (action === "invites" && method === "DELETE") {
-        run("DELETE FROM invites WHERE guild=?", gid);
+        db.transaction(() => {
+          run("DELETE FROM invites WHERE guild=?", gid);
+          audit(gid, uid, "invite.revokeAll");
+        })();
+        return response({ ok: true });
+      }
+      if (action === "channelorder" && method === "POST") {
+        const b = await json(req),
+          existing = channels(gid).map((r) => r.id);
+        if (
+          !Array.isArray(b.ids) ||
+          b.ids.length !== existing.length ||
+          new Set(b.ids).size !== existing.length ||
+          b.ids.some((id: unknown) => !existing.includes(id))
+        )
+          fail(400, "チャンネル一覧が変更された。更新して再試行して");
+        db.transaction(() => {
+          b.ids.forEach((id: string, position: number) =>
+            run(
+              "INSERT INTO room_preferences VALUES(?,'',?) ON CONFLICT(room) DO UPDATE SET position=excluded.position",
+              id,
+              position,
+            ),
+          );
+          audit(gid, uid, "channel.order");
+        })();
+        changed(gid);
         return response({ ok: true });
       }
       if (action === "roster" && method === "PUT") {
@@ -752,6 +853,12 @@ export function createApp(
             JSON.stringify(r),
             b.signature,
           );
+          for (const id of previous)
+            if (!seen.has(id))
+              audit(gid, uid, "member.remove", user(id).display);
+          for (const member of r.members)
+            if (!previous.includes(member.id))
+              audit(gid, uid, "member.add", user(member.id).display);
         })();
         for (const ws of sockets)
           if (
@@ -768,7 +875,17 @@ export function createApp(
       }
       if (action === "reject" && method === "POST") {
         const b = await json(req);
-        run("DELETE FROM requests WHERE guild=? AND user=?", gid, b.user);
+        db.transaction(() => {
+          const pending = one(
+            "SELECT 1 FROM requests WHERE guild=? AND user=?",
+            gid,
+            b.user,
+          );
+          if (!pending) fail(404, "参加申請がない");
+          run("DELETE FROM requests WHERE guild=? AND user=?", gid, b.user);
+          audit(gid, uid, "member.reject", user(b.user).display);
+        })();
+        changed(gid);
         return response({ ok: true });
       }
       if (action === "channels" && method === "POST") {
@@ -776,14 +893,20 @@ export function createApp(
         if (!["text", "voice"].includes(b.kind)) fail(400, "種類が不正");
         if (all("SELECT id FROM rooms WHERE guild=?", gid).length >= 100)
           fail(400, "チャンネル上限");
-        const id = uuid();
-        run(
-          "INSERT INTO rooms VALUES(?,?,?,?)",
-          id,
-          gid,
-          b.kind,
-          text(b.name, 60),
-        );
+        const id = uuid(),
+          name = text(b.name, 60),
+          description = topic(b.topic ?? ""),
+          position = Math.max(0, ...channels(gid).map((r) => r.position)) + 1;
+        db.transaction(() => {
+          run("INSERT INTO rooms VALUES(?,?,?,?)", id, gid, b.kind, name);
+          run(
+            "INSERT INTO room_preferences VALUES(?,?,?)",
+            id,
+            description,
+            position,
+          );
+          audit(gid, uid, "channel.create", name);
+        })();
         changed(gid);
         return response({ id });
       }
@@ -794,6 +917,11 @@ export function createApp(
             "{}",
         );
         const profile = {
+          ...old,
+          defaultChannel:
+            b.defaultChannel === undefined
+              ? (old.defaultChannel ?? null)
+              : b.defaultChannel,
           description:
             b.description === undefined
               ? (old.description ?? "")
@@ -807,6 +935,16 @@ export function createApp(
               ? (old.bannerColor ?? "#8b7cf8")
               : b.bannerColor,
         };
+        if (
+          profile.defaultChannel !== null &&
+          (typeof profile.defaultChannel !== "string" ||
+            !one(
+              "SELECT 1 FROM rooms WHERE id=? AND guild=? AND kind='text'",
+              profile.defaultChannel,
+              gid,
+            ))
+        )
+          fail(400, "既定のテキストチャンネルが不正");
         if (!/^#[0-9a-fA-F]{6}$/.test(profile.bannerColor))
           fail(400, "カラーが不正");
         db.transaction(() => {
@@ -817,6 +955,7 @@ export function createApp(
             gid,
             JSON.stringify(profile),
           );
+          audit(gid, uid, "server.update");
         })();
         changed(gid);
         return response({ ok: true });
@@ -910,10 +1049,37 @@ export function createApp(
         if (!r.guild) fail(403, "DMは変更できない");
         owner(r.guild, uid);
         if (method === "PATCH") {
-          const b = await json(req);
-          run("UPDATE rooms SET name=? WHERE id=?", text(b.name, 60), r.id);
+          const b = await json(req),
+            name = b.name === undefined ? r.name : text(b.name, 60),
+            description = b.topic === undefined ? undefined : topic(b.topic);
+          db.transaction(() => {
+            run("UPDATE rooms SET name=? WHERE id=?", name, r.id);
+            if (description !== undefined)
+              run(
+                "INSERT INTO room_preferences VALUES(?,?,?) ON CONFLICT(room) DO UPDATE SET topic=excluded.topic",
+                r.id,
+                description,
+                channels(r.guild).find((c) => c.id === r.id)!.position,
+              );
+            audit(r.guild, uid, "channel.update", name);
+          })();
         } else {
-          run("DELETE FROM rooms WHERE id=?", r.id);
+          db.transaction(() => {
+            run("DELETE FROM rooms WHERE id=?", r.id);
+            const profile = JSON.parse(
+              one("SELECT data FROM guild_profiles WHERE guild=?", r.guild)
+                ?.data ?? "{}",
+            );
+            if (profile.defaultChannel === r.id) {
+              profile.defaultChannel = null;
+              run(
+                "UPDATE guild_profiles SET data=? WHERE guild=?",
+                JSON.stringify(profile),
+                r.guild,
+              );
+            }
+            audit(r.guild, uid, "channel.delete", r.name);
+          })();
           for (const ws of sockets) if (ws.data.voice === r.id) leaveVoice(ws);
         }
         changed(r.guild);

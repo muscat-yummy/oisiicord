@@ -221,8 +221,7 @@ async function refreshState() {
     roomId = null;
   }
   if (roomId && !currentRoom()) roomId = null;
-  if (guildId && !roomId)
-    roomId = currentGuild().channels.find((r) => r.kind === "text")?.id ?? null;
+  if (guildId && !roomId) roomId = defaultRoom(currentGuild());
   $("#my-name").textContent = state.me.display;
   $("#connection").textContent = {
     online: "オンライン",
@@ -412,6 +411,8 @@ function renderNav() {
       ? users.get(r.users.find((id) => id !== me.id)).display
       : r.name
     : (g?.name ?? "ダイレクトメッセージ");
+  $("#room-topic").textContent = r?.topic ?? "";
+  $("#room-topic").title = r?.topic ?? "";
   $("#room-symbol").replaceChildren(
     icon(
       r?.kind === "dm" ? "users" : r?.kind === "voice" ? "volume" : "hash",
@@ -447,11 +448,20 @@ function restoreDraft() {
   $("#reply-bar").hidden = true;
   renderAttachments();
 }
+function defaultRoom(g) {
+  return (
+    g?.channels.find(
+      (r) => r.id === g.profile?.defaultChannel && r.kind === "text",
+    )?.id ??
+    g?.channels.find((r) => r.kind === "text")?.id ??
+    null
+  );
+}
 async function selectGuild(id) {
   if (sending) throw Error("送信が完了してからチャンネルを変更して");
   stashDraft();
   guildId = id;
-  roomId = currentGuild()?.channels.find((r) => r.kind === "text")?.id ?? null;
+  roomId = defaultRoom(currentGuild());
   reply = null;
   pinsOnly = false;
   $("#search").value = "";
@@ -1042,22 +1052,68 @@ function guildActions() {
 function confirmAction(title, fn) {
   modal(title, node("p", {}, "この操作を実行する？"), fn, "実行");
 }
-async function inviteDialog() {
+async function inviteDialog(onCreated) {
   const g = currentGuild(),
-    { token } = await api("/guilds/" + g.id + "/invites", {});
-  const data = { guild: g.id, owner: g.owner, keys: me.keys, token };
-  const url =
-    location.origin +
-    "/#invite=" +
-    encodeURIComponent(C.b64(C.bytes(JSON.stringify(data))));
-  const input = node("textarea", { rows: 5, readonly: true }, url);
+    expiry = node("select", { "aria-label": "有効期限" }),
+    uses = node("select", { "aria-label": "利用回数" });
+  for (const [value, label] of [
+    [3600, "1時間"],
+    [86400, "24時間"],
+    [604800, "7日間"],
+    [0, "期限なし"],
+  ])
+    expiry.append(node("option", { value }, label));
+  expiry.value = "86400";
+  for (const value of [0, 1, 5, 10, 25, 100])
+    uses.append(node("option", { value }, value ? value + "回" : "無制限"));
+  const result = node("div", { class: "invite-result", hidden: true }),
+    generate = button(
+      "リンクを作成",
+      async () => {
+        generate.disabled = true;
+        try {
+          const { token } = await api("/guilds/" + g.id + "/invites", {
+            expiresIn: Number(expiry.value),
+            maxUses: Number(uses.value),
+          });
+          const data = { guild: g.id, owner: g.owner, keys: me.keys, token },
+            url =
+              location.origin +
+              "/#invite=" +
+              encodeURIComponent(C.b64(C.bytes(JSON.stringify(data))));
+          result.replaceChildren(
+            node(
+              "textarea",
+              { rows: 4, readonly: true, "aria-label": "招待リンク" },
+              url,
+            ),
+            button(
+              "コピー",
+              async () => {
+                await navigator.clipboard.writeText(url);
+                toast("コピーした");
+              },
+              "primary",
+            ),
+          );
+          result.hidden = false;
+          generate.textContent = "新しいリンクを作成";
+          if (typeof onCreated === "function") await onCreated();
+        } finally {
+          generate.disabled = false;
+        }
+      },
+      "primary",
+    );
   modal("招待リンク", [
-    node("p", {}, "有効期限：24時間"),
-    input,
-    button("コピー", async () => {
-      await navigator.clipboard.writeText(url);
-      toast("コピーした");
-    }),
+    node(
+      "div",
+      { class: "invite-options" },
+      node("label", {}, "有効期限", expiry),
+      node("label", {}, "利用回数", uses),
+    ),
+    generate,
+    result,
   ]);
 }
 async function acceptInvite(data) {
@@ -1133,7 +1189,7 @@ async function updateRoster(members) {
   );
   await refresh();
 }
-function newChannel(kind) {
+function newChannel(kind, onCreated) {
   prompt(
     "チャンネルを作成",
     "チャンネル名",
@@ -1142,6 +1198,7 @@ function newChannel(kind) {
       const g = currentGuild();
       await api("/guilds/" + g.id + "/channels", { name, kind });
       await refresh();
+      if (typeof onCreated === "function") await onCreated();
     },
     "作成",
   );
@@ -1372,7 +1429,14 @@ function connect() {
       }
       if (m.type === "voice-replaced") await leaveVoice();
       if (m.type === "event") {
+        const eventGuild = state.guilds.find((g) =>
+          g.channels.some((r) => r.id === m.room),
+        );
+        const notify =
+          !eventGuild ||
+          preferences().guildNotifications?.[eventGuild.id] !== "silent";
         if (
+          notify &&
           (m.room !== roomId || document.hidden) &&
           state.me.profile?.status !== "dnd" &&
           m.author !== me.id
@@ -1383,6 +1447,7 @@ function connect() {
           renderNav();
           if (
             "Notification" in window &&
+            notify &&
             preferences().desktopNotifications &&
             state.me.profile?.status !== "dnd" &&
             Notification.permission === "granted" &&
@@ -1981,14 +2046,23 @@ $("#home").onclick = () =>
     renderMembers();
     renderMessages();
   });
+function guildChoice(label, ic, fn) {
+  const el = button("", fn, "guild-choice");
+  el.append(
+    node("span", { class: "guild-choice-icon" }, icon(ic, 28)),
+    node("strong", {}, label),
+    node("span", { class: "guild-choice-arrow" }, icon("chevron", 22)),
+  );
+  return el;
+}
 $("#add-guild").onclick = () =>
   modal(
-    "サーバー",
+    "サーバーを追加",
     node(
       "div",
-      { class: "buttons" },
-      button("サーバーを作成", createGuild),
-      button("招待リンクで参加", () =>
+      { class: "guild-choices" },
+      guildChoice("サーバーを作成", "plus", createGuild),
+      guildChoice("招待リンクで参加", "link", () =>
         prompt(
           "招待リンクで参加",
           "招待リンク",

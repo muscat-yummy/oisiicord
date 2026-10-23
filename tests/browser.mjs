@@ -94,6 +94,7 @@ try {
   await page.getByText("ピン留め済み", { exact: true }).waitFor();
   await page.locator("#side-menu").click();
   await page.getByRole("button", { name: "友達を招待", exact: true }).click();
+  await page.getByRole("button", { name: "リンクを作成", exact: true }).click();
   const invite = await page.locator("#modal-body textarea").inputValue();
   await page.locator("#modal-close").click();
   const c2 = await browser.newContext({

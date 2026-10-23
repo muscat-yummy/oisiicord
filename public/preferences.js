@@ -1,5 +1,6 @@
 export const defaults = {
   theme: "dark",
+  guildNotifications: {},
   accent: "#5865f2",
   fontSize: 15,
   compact: false,
