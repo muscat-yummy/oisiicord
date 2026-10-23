@@ -526,3 +526,131 @@ test("realtime socket authorization, presence, event delivery and logout", async
     attacker.socket.close();
   }
 });
+
+test("profile and guild metadata validation and persistence", async () => {
+  expect(
+    (
+      await request(
+        alice,
+        "/me",
+        {
+          display: "Alice",
+          bio: "自己紹介",
+          pronouns: "they/them",
+          status: "idle",
+          bannerColor: "#5865f2",
+        },
+        "PATCH",
+      )
+    ).status,
+  ).toBe(200);
+  let s = await request(alice, "/state");
+  expect(s.body.me.profile).toMatchObject({
+    bio: "自己紹介",
+    status: "idle",
+    bannerColor: "#5865f2",
+  });
+  expect(
+    (await request(alice, "/me", { status: "invalid" }, "PATCH")).status,
+  ).toBe(400);
+  expect(
+    (await request(alice, "/me", { avatar: { id: "../../file" } }, "PATCH"))
+      .status,
+  ).toBe(400);
+  expect(
+    (
+      await request(
+        alice,
+        "/guilds/" + guild,
+        {
+          name: "プロフィール検証",
+          description: "サーバーの説明",
+          bannerColor: "#23a559",
+        },
+        "PATCH",
+      )
+    ).status,
+  ).toBe(200);
+  s = await request(alice, "/state");
+  expect(s.body.guilds[0].profile.description).toBe("サーバーの説明");
+  expect(
+    (
+      await request(
+        mallory,
+        "/guilds/" + guild,
+        { description: "bad" },
+        "PATCH",
+      )
+    ).status,
+  ).toBe(403);
+  expect((await request(mallory, "/guilds/" + guild + "/invites")).status).toBe(
+    403,
+  );
+});
+test("sessions can be listed and revoked without exposing authentication cookies", async () => {
+  const login = await request(undefined, "/auth/login", {
+    username: alice.username,
+    auth: alice.auth,
+  });
+  const other = {
+    ...alice,
+    cookie: login.headers.get("set-cookie")!.split(";")[0],
+  };
+  const sessions = await request(alice, "/sessions");
+  expect(sessions.status).toBe(200);
+  expect(sessions.body.every((s: any) => !("token" in s))).toBe(true);
+  const current = sessions.body.find((s: any) => s.current),
+    target = sessions.body.find((s: any) => !s.current);
+  expect(
+    (await request(alice, "/sessions/" + current.id, {}, "DELETE")).status,
+  ).toBe(400);
+  expect(
+    (await request(alice, "/sessions/" + target.id, {}, "DELETE")).status,
+  ).toBe(200);
+  expect((await request(other, "/state")).status).toBe(401);
+});
+test("password changes preserve identity and invalidate the old authentication secret", async () => {
+  const salt = C.b64(C.random(32)),
+    auth = C.b64(C.random(32)),
+    vault = await C.encryptVault(
+      alice.privateKeys,
+      C.random(32),
+      alice.username,
+    ),
+    proof = { user: alice.id, salt, auth, vault };
+  expect(
+    (
+      await request(alice, "/auth/password", {
+        ...proof,
+        oldAuth: C.b64(C.random(32)),
+        signature: await C.sign(proof, alice.identity),
+      })
+    ).status,
+  ).toBe(403);
+  expect(
+    (
+      await request(alice, "/auth/password", {
+        ...proof,
+        oldAuth: alice.auth,
+        signature: await C.sign(proof, alice.identity),
+      })
+    ).status,
+  ).toBe(200);
+  expect(
+    (
+      await request(undefined, "/auth/login", {
+        username: alice.username,
+        auth: alice.auth,
+      })
+    ).status,
+  ).toBe(401);
+  expect(
+    (
+      await request(undefined, "/auth/login", {
+        username: alice.username,
+        auth,
+      })
+    ).status,
+  ).toBe(200);
+  expect((await request(alice, "/state")).body.me.keys).toEqual(alice.keys);
+});

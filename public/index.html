@@ -3,7 +3,7 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width,initial-scale=1" />
-    <meta name="theme-color" content="#171821" />
+    <meta name="theme-color" content="#202024" />
     <title>Oisiicord</title>
     <link rel="icon" href="/icon.svg" type="image/svg+xml" />
     <link rel="manifest" href="/manifest.webmanifest" />
@@ -27,8 +27,7 @@
               pattern="[a-zA-Z0-9_]{3,32}"
               minlength="3"
               maxlength="32"
-              required
-              placeholder="半角英数字・_" /></label
+              required /></label
           ><label id="display-label" hidden
             >表示名<input
               id="display"
@@ -49,9 +48,6 @@
           </button>
         </form>
         <button id="auth-switch" class="link">アカウントを作成</button>
-        <p class="help">
-          パスワードを忘れると会話の復号鍵を取り戻せない。12文字以上で設定して。
-        </p>
       </div>
     </section>
     <div id="workspace" class="workspace" hidden>
@@ -65,45 +61,67 @@
           id="add-guild"
           class="rail-item add"
           title="サーバー作成・招待から参加"
-        >
-          ＋</button
+        ></button
         ><button
           id="security"
           class="rail-item security"
-          title="鍵・セキュリティ設定"
-        >
-          ◇
-        </button>
+          title="ユーザー設定"
+          hidden
+        ></button>
       </nav>
       <aside class="sidebar">
         <header class="side-header">
           <button id="side-title">ダイレクトメッセージ</button
-          ><button id="side-menu" class="icon-button" title="サーバー設定">
-            ⌄
-          </button>
+          ><button
+            id="side-menu"
+            class="icon-button"
+            title="サーバーメニュー"
+          ></button>
         </header>
         <div id="channel-list" class="channel-list"></div>
         <div id="voice-controls" class="voice-controls" hidden>
-          <span id="voice-status">音声接続中</span>
-          <div>
-            <button id="mute" title="マイクをミュート">マイク</button
-            ><button id="camera">カメラ</button
-            ><button id="share">画面共有</button
-            ><button id="hangup" class="danger">退出</button>
+          <div class="voice-connection">
+            <span id="voice-indicator"></span>
+            <div>
+              <strong id="voice-status">通話接続中</strong
+              ><small id="voice-channel-name"></small>
+            </div>
+            <button
+              id="hangup"
+              class="icon-button danger"
+              title="通話から退出"
+            ></button>
+          </div>
+          <div class="voice-quick-controls">
+            <button id="camera" class="voice-quick" title="カメラ"></button
+            ><button id="share" class="voice-quick" title="画面共有"></button>
           </div>
         </div>
         <footer class="profile">
-          <div id="my-avatar" class="avatar"></div>
-          <div class="profile-name">
-            <strong id="my-name"></strong><small id="connection">接続中</small>
-          </div>
-          <button
-            id="profile-settings"
-            class="icon-button"
-            title="ユーザー設定"
-          >
-            ⚙
+          <button id="my-profile" class="profile-person" title="プロフィール">
+            <div id="my-avatar" class="avatar"></div>
+            <div class="profile-name">
+              <strong id="my-name"></strong
+              ><small id="connection">接続中</small>
+            </div>
           </button>
+          <div class="profile-controls">
+            <button
+              id="mute"
+              class="icon-button"
+              title="マイクをミュート"
+            ></button
+            ><button
+              id="deafen"
+              class="icon-button"
+              title="スピーカーをミュート"
+            ></button
+            ><button
+              id="profile-settings"
+              class="icon-button"
+              title="ユーザー設定"
+            ></button>
+          </div>
         </footer>
       </aside>
       <main class="main">
@@ -112,29 +130,44 @@
             id="mobile-channels"
             class="icon-button"
             aria-label="チャンネルを表示"
-          >
-            ☰</button
-          ><span id="room-symbol" class="room-symbol">@</span>
+          ></button
+          ><span id="room-symbol" class="room-symbol"></span>
           <div class="room-heading">
             <h1 id="room-name">ダイレクトメッセージ</h1>
-            <span id="encryption-status" class="encrypted">端末間暗号化</span>
           </div>
           <div class="tools">
-            <button id="call" class="icon-button" title="音声通話" hidden>
-              通話</button
-            ><button id="pins" class="icon-button" title="ピン留め">ピン</button
-            ><button id="toggle-members" class="icon-button" title="メンバー">
-              メンバー</button
+            <button
+              id="call"
+              class="icon-button"
+              title="音声通話"
+              hidden
+            ></button
+            ><button id="pins" class="icon-button" title="ピン留め"></button
+            ><button
+              id="toggle-members"
+              class="icon-button"
+              title="メンバー"
+            ></button
             ><input
               id="search"
               class="search"
               type="search"
-              aria-label="復号済みメッセージを検索"
-              placeholder="この会話を検索"
+              aria-label="この会話を検索"
+              placeholder="検索"
             />
           </div>
         </header>
         <div id="call-stage" class="call-stage" hidden></div>
+        <div id="stage-controls" class="stage-controls" hidden>
+          <button id="stage-mute" title="マイクをミュート"></button
+          ><button id="stage-camera" title="カメラ"></button
+          ><button id="stage-share" title="画面共有"></button
+          ><button
+            id="stage-hangup"
+            title="通話から退出"
+            class="danger"
+          ></button>
+        </div>
         <div id="notice" class="notice" hidden></div>
         <div
           id="messages"
@@ -152,9 +185,8 @@
               id="attach"
               type="button"
               class="attach"
-              title="ファイル添付"
-            >
-              ＋</button
+              title="ファイルを添付"
+            ></button
             ><textarea
               id="message-input"
               rows="1"
@@ -167,16 +199,10 @@
               type="button"
               class="icon-button"
               title="絵文字"
-            >
-              ☺</button
-            ><button id="send" type="submit" title="送信">送信</button
+            ></button
+            ><button id="send" type="submit" title="送信"></button
             ><input id="file-input" type="file" multiple hidden />
           </form>
-          <div class="composer-help">
-            Enter で送信・Shift + Enter で改行<span
-              >本文・添付・通話は端末で暗号化</span
-            >
-          </div>
         </div>
       </main>
       <aside id="members-panel" class="members-panel">
@@ -184,6 +210,7 @@
         <div id="members"></div>
       </aside>
     </div>
+    <div id="guild-menu" class="guild-menu" hidden></div>
     <dialog id="modal">
       <form id="modal-form">
         <header>
@@ -193,14 +220,12 @@
             class="icon-button"
             type="button"
             aria-label="閉じる"
-          >
-            ×
-          </button>
+          ></button>
         </header>
         <div id="modal-body"></div>
         <p id="modal-error" class="error" role="alert"></p>
         <footer>
-          <button type="button" id="modal-cancel">閉じる</button
+          <button type="button" id="modal-cancel">キャンセル</button
           ><button id="modal-submit" type="submit" class="primary">保存</button>
         </footer>
       </form>

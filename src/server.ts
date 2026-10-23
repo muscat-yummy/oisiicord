@@ -101,7 +101,13 @@ export function createApp(
       id,
     );
     if (!row) return fail(404, "ユーザーが見つからない");
-    return { ...row, keys: JSON.parse(row.keys) };
+    return {
+      ...row,
+      keys: JSON.parse(row.keys),
+      profile: JSON.parse(
+        one("SELECT data FROM profiles WHERE user=?", id)?.data ?? "{}",
+      ),
+    };
   };
   function roomAccess(roomId: string, uid: string) {
     const r = one("SELECT * FROM rooms WHERE id=?", roomId);
@@ -239,6 +245,10 @@ export function createApp(
     ).map((g) => ({
       ...g,
       roster: JSON.parse(g.roster),
+      profile: JSON.parse(
+        one("SELECT data FROM guild_profiles WHERE guild=?", g.id)?.data ??
+          "{}",
+      ),
       channels: all("SELECT * FROM rooms WHERE guild=? ORDER BY rowid", g.id),
       requests:
         g.owner === uid
@@ -250,7 +260,7 @@ export function createApp(
     const dms = all(
       "SELECT r.* FROM rooms r JOIN peers p ON p.room=r.id WHERE p.user=?",
       uid,
-    ).map((r) => ({ ...r, users: members(r) }));
+    ).map((r) => ({ ...r, id: r.id, users: members(r) }));
     const ids = new Set([
       uid,
       ...guilds.flatMap((g) => g.roster.members.map((m: any) => m.id)),
@@ -269,6 +279,14 @@ export function createApp(
         ),
       ].filter((id) => ids.has(id)),
       iceServers: JSON.parse(process.env.ICE_SERVERS ?? "[]"),
+      voice: [...sockets]
+        .filter((s) => s.data.voice && sessionValid(s.data))
+        .map((s) => ({ room: s.data.voice, user: s.data.user }))
+        .filter(
+          (s) =>
+            guilds.some((g) => g.channels.some((r: Row) => r.id === s.room)) ||
+            dms.some((r) => r.id === s.room),
+        ),
     };
   }
   const common = {
@@ -410,9 +428,147 @@ export function createApp(
       });
     }
     if (p === "/api/state" && method === "GET") return response(state(uid));
+    function avatarDescriptor(value: any) {
+      if (value == null) return null;
+      if (
+        typeof value !== "object" ||
+        !idPattern.test(value.id) ||
+        typeof value.key !== "string" ||
+        value.key.length !== 44 ||
+        typeof value.iv !== "string" ||
+        value.iv.length !== 16 ||
+        typeof value.hash !== "string" ||
+        value.hash.length !== 44 ||
+        value.mime !== "image/webp" ||
+        !Number.isInteger(value.size) ||
+        value.size < 1 ||
+        value.size > 65536
+      )
+        fail(400, "画像データが不正");
+      return {
+        id: value.id,
+        key: value.key,
+        iv: value.iv,
+        hash: value.hash,
+        mime: "image/webp",
+        name: "avatar.webp",
+        size: value.size,
+      };
+    }
     if (p === "/api/me" && method === "PATCH") {
-      const b = await json(req);
-      run("UPDATE users SET display=? WHERE id=?", text(b.display, 40), uid);
+      const b = await json(req),
+        previous = user(uid),
+        old = previous.profile;
+      const profile = {
+        bio:
+          b.bio === undefined ? (old.bio ?? "") : String(b.bio).slice(0, 190),
+        pronouns:
+          b.pronouns === undefined
+            ? (old.pronouns ?? "")
+            : String(b.pronouns).slice(0, 40),
+        status: b.status === undefined ? (old.status ?? "online") : b.status,
+        bannerColor:
+          b.bannerColor === undefined
+            ? (old.bannerColor ?? "#8b7cf8")
+            : b.bannerColor,
+        avatar:
+          b.avatar === undefined
+            ? (old.avatar ?? null)
+            : avatarDescriptor(b.avatar),
+      };
+      if (
+        !["online", "idle", "dnd", "invisible"].includes(profile.status) ||
+        !/^#[0-9a-fA-F]{6}$/.test(profile.bannerColor)
+      )
+        fail(400, "プロフィール設定が不正");
+      db.transaction(() => {
+        if (b.display !== undefined)
+          run(
+            "UPDATE users SET display=? WHERE id=?",
+            text(b.display, 40),
+            uid,
+          );
+        run(
+          "INSERT INTO profiles VALUES(?,?) ON CONFLICT(user) DO UPDATE SET data=excluded.data",
+          uid,
+          JSON.stringify(profile),
+        );
+      })();
+      emitUsers(contacts(uid), { type: "state" });
+      return response({ ok: true });
+    }
+    if (p === "/api/sessions" && method === "GET")
+      return response(
+        all(
+          "SELECT token,expires FROM sessions WHERE user=? AND expires>?",
+          uid,
+          Date.now(),
+        ).map((s) => ({
+          id: sha(s.token),
+          expires: s.expires,
+          current: s.token === session.token,
+        })),
+      );
+    const sessionMatch = p.match(/^\/api\/sessions\/([a-f0-9]{64})$/);
+    if (sessionMatch && method === "DELETE") {
+      const target = all("SELECT token FROM sessions WHERE user=?", uid).find(
+        (s) => sha(s.token) === sessionMatch[1],
+      );
+      if (!target) fail(404, "セッションが見つからない");
+      if (target!.token === session.token)
+        fail(400, "現在の端末はログアウトを使って");
+      run("DELETE FROM sessions WHERE token=?", target!.token);
+      for (const ws of sockets)
+        if (ws.data.session === target!.token)
+          ws.close(4001, "Session revoked");
+      return response({ ok: true });
+    }
+    if (p === "/api/auth/password" && method === "POST") {
+      limit("password:" + uid, 5, 300000);
+      const b = await json(req),
+        old = one("SELECT * FROM users WHERE id=?", uid)!;
+      if (
+        typeof b.oldAuth !== "string" ||
+        !(await Bun.password.verify(b.oldAuth, old.auth))
+      )
+        fail(403, "現在のパスワードが違う");
+      if (
+        typeof b.auth !== "string" ||
+        b.auth.length !== 44 ||
+        typeof b.salt !== "string" ||
+        b.salt.length !== 44 ||
+        typeof b.vault?.iv !== "string" ||
+        typeof b.vault?.ct !== "string" ||
+        b.vault.ct.length > 10000
+      )
+        fail(400, "更新情報が不正");
+      const proof = { user: uid, auth: b.auth, salt: b.salt, vault: b.vault };
+      if (!(await verify(proof, b.signature, user(uid).keys)))
+        fail(400, "署名が不正");
+      const hash = await Bun.password.hash(b.auth, {
+        algorithm: "argon2id",
+        memoryCost: 65536,
+        timeCost: 3,
+      });
+      db.transaction(() => {
+        const result = run(
+          "UPDATE users SET auth=?,salt=?,vault=? WHERE id=? AND auth=?",
+          hash,
+          b.salt,
+          JSON.stringify(b.vault),
+          uid,
+          old.auth,
+        );
+        if (!result.changes) fail(409, "パスワード更新が競合した");
+        run(
+          "DELETE FROM sessions WHERE user=? AND token<>?",
+          uid,
+          session.token,
+        );
+      })();
+      for (const ws of sockets)
+        if (ws.data.user === uid && ws.data.session !== session.token)
+          ws.close(4001, "Password changed");
       return response({ ok: true });
     }
     if (p === "/api/users" && method === "GET") {
@@ -498,6 +654,14 @@ export function createApp(
         return response({ name: g.name });
       }
       const g = owner(gid, uid);
+      if (action === "invites" && method === "GET")
+        return response(
+          all(
+            "SELECT hash AS id,expires FROM invites WHERE guild=? AND expires>?",
+            gid,
+            Date.now(),
+          ),
+        );
       if (action === "invites" && method === "POST") {
         const token = crypto.getRandomValues(new Uint8Array(32));
         const value = Buffer.from(token).toString("base64url");
@@ -625,7 +789,35 @@ export function createApp(
       }
       if (!action && method === "PATCH") {
         const b = await json(req);
-        run("UPDATE guilds SET name=? WHERE id=?", text(b.name, 60), gid);
+        const old = JSON.parse(
+          one("SELECT data FROM guild_profiles WHERE guild=?", gid)?.data ??
+            "{}",
+        );
+        const profile = {
+          description:
+            b.description === undefined
+              ? (old.description ?? "")
+              : String(b.description).slice(0, 300),
+          icon:
+            b.icon === undefined
+              ? (old.icon ?? null)
+              : avatarDescriptor(b.icon),
+          bannerColor:
+            b.bannerColor === undefined
+              ? (old.bannerColor ?? "#8b7cf8")
+              : b.bannerColor,
+        };
+        if (!/^#[0-9a-fA-F]{6}$/.test(profile.bannerColor))
+          fail(400, "カラーが不正");
+        db.transaction(() => {
+          if (b.name !== undefined)
+            run("UPDATE guilds SET name=? WHERE id=?", text(b.name, 60), gid);
+          run(
+            "INSERT INTO guild_profiles VALUES(?,?) ON CONFLICT(guild) DO UPDATE SET data=excluded.data",
+            gid,
+            JSON.stringify(profile),
+          );
+        })();
         changed(gid);
         return response({ ok: true });
       }
@@ -706,7 +898,12 @@ export function createApp(
           fail(409, "送信済みのメッセージID");
         }
         const event = one("SELECT seq FROM events WHERE id=?", e.header.id)!;
-        emitUsers(members(r), { type: "event", room: r.id, seq: event.seq });
+        emitUsers(members(r), {
+          type: "event",
+          room: r.id,
+          seq: event.seq,
+          author: uid,
+        });
         return response({ seq: event.seq });
       }
       if (!m[2] && ["PATCH", "DELETE"].includes(method)) {
@@ -824,6 +1021,9 @@ export function createApp(
           "/": "index.html",
           "/app.js": "app.js",
           "/crypto.js": "crypto.js",
+          "/icons.js": "icons.js",
+          "/preferences.js": "preferences.js",
+          "/settings.js": "settings.js",
           "/style.css": "style.css",
           "/icon.svg": "icon.svg",
           "/manifest.webmanifest": "manifest.webmanifest",
@@ -909,6 +1109,19 @@ export function createApp(
             if (peers.length >= 5) fail(409, "音声通話は最大6接続");
             leaveVoice(ws);
             ws.data.voice = r.id;
+            emitUsers(members(r), {
+              type: "voice-presence",
+              room: r.id,
+              users: [
+                ...new Set(
+                  [...sockets]
+                    .filter(
+                      (s) => s.data.voice === r.id && sessionValid(s.data),
+                    )
+                    .map((s) => s.data.user),
+                ),
+              ],
+            });
             ws.send(
               JSON.stringify({
                 type: "voice-peers",

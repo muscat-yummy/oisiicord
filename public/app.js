@@ -1,4 +1,12 @@
 import * as C from "./crypto.js";
+import { icon, setIcon } from "./icons.js";
+import {
+  preferences,
+  loadPreferences,
+  updatePreferences,
+  sound,
+} from "./preferences.js";
+import { createSettings } from "./settings.js";
 const $ = (s) => document.querySelector(s);
 const node = (tag, attrs = {}, ...children) => {
   const n = document.createElement(tag);
@@ -34,6 +42,7 @@ let me,
   activeVoice = null,
   localStream = null,
   videoTrack = null,
+  videoMode = null,
   reconnectTimer,
   heartbeat;
 const histories = new Map(),
@@ -62,7 +71,7 @@ async function guard(fn) {
   try {
     return await fn();
   } catch (e) {
-    toast(e.message ?? String(e));
+    if (e.name !== "AbortError") toast(e.message ?? String(e));
   }
 }
 function saveTrust() {
@@ -215,19 +224,81 @@ async function refreshState() {
   if (guildId && !roomId)
     roomId = currentGuild().channels.find((r) => r.kind === "text")?.id ?? null;
   $("#my-name").textContent = state.me.display;
-  $("#my-avatar").textContent = initials(state.me.display);
+  $("#connection").textContent = {
+    online: "オンライン",
+    idle: "退席中",
+    dnd: "取り込み中",
+    invisible: "オフライン表示",
+  }[state.me.profile?.status ?? "online"];
+  $("#my-avatar").replaceWith(
+    Object.assign(avatar(state.me, true), { id: "my-avatar" }),
+  );
   renderNav();
   if (roomId) await loadHistory(roomId);
   else renderMessages();
   renderMembers();
 }
 const initials = (s) => (s ?? "?").slice(0, 2).toUpperCase();
+const imageCache = new Map();
+async function profileImage(descriptor) {
+  const key = descriptor.id + ":" + descriptor.hash + ":" + descriptor.key;
+  if (!imageCache.has(key))
+    imageCache.set(
+      key,
+      (async () => {
+        if (
+          !/^[\w-]{1,100}$/.test(descriptor.id) ||
+          descriptor.mime !== "image/webp"
+        )
+          throw Error("画像が不正");
+        const response = await fetch("/api/files/" + descriptor.id);
+        if (!response.ok) throw Error("画像を取得できない");
+        const data = await C.decryptFile(
+            await response.arrayBuffer(),
+            descriptor,
+          ),
+          blob = new Blob([data], { type: "image/webp" }),
+          bitmap = await createImageBitmap(blob);
+        if (bitmap.width !== 128 || bitmap.height !== 128) {
+          bitmap.close();
+          throw Error("画像サイズが不正");
+        }
+        bitmap.close();
+        return URL.createObjectURL(blob);
+      })(),
+    );
+  return imageCache.get(key);
+}
 function avatar(u, online = false) {
-  return node(
-    "div",
-    { class: "avatar" + (online ? " online" : "") },
-    initials(u?.display ?? u?.username),
-  );
+  const status = u?.profile?.status ?? "online",
+    a = node(
+      "div",
+      {
+        class:
+          "avatar" +
+          (online && status !== "invisible" ? " online status-" + status : ""),
+      },
+      initials(u?.display ?? u?.username),
+    );
+  if (u?.profile?.avatar)
+    profileImage(u.profile.avatar)
+      .then((url) =>
+        a.replaceChildren(node("img", { src: url, alt: "", loading: "lazy" })),
+      )
+      .catch(() => {});
+  return a;
+}
+async function uploadProfileImage(file) {
+  const { ciphertext, descriptor } = await C.encryptFile(file);
+  const response = await fetch("/api/files", {
+    method: "POST",
+    headers: { "Content-Type": "application/octet-stream" },
+    body: ciphertext,
+  });
+  const result = await response.json();
+  if (!response.ok) throw Error(result.error ?? "画像を保存できない");
+  const { id } = result;
+  return { ...descriptor, id };
 }
 function renderNav() {
   const list = $("#guild-list");
@@ -240,6 +311,13 @@ function renderNav() {
       "rail-item" + (guildId === g.id ? " active" : ""),
     );
     b.title = g.name;
+    b.setAttribute("aria-label", g.name);
+    if (g.profile?.icon) {
+      b.replaceChildren(
+        avatar({ display: g.name, profile: { avatar: g.profile.icon } }),
+      );
+      b.classList.add("has-image");
+    }
     list.append(b);
   }
   const g = currentGuild();
@@ -254,7 +332,10 @@ function renderNav() {
       ["voice", "ボイスチャンネル"],
     ]) {
       const heading = node("div", { class: "section-label" }, label);
-      if (owner) heading.append(button("＋", () => newChannel(kind)));
+      if (owner)
+        heading.append(
+          iconButton("plus", "チャンネルを作成", () => newChannel(kind)),
+        );
       channels.append(heading);
       for (const r of g.channels.filter((r) => r.kind === kind)) {
         const b = button(
@@ -265,12 +346,27 @@ function renderNav() {
             (unread.has(r.id) ? " unread" : ""),
         );
         b.append(
-          node("span", { class: "symbol" }, kind === "voice" ? "◖" : "#"),
+          node(
+            "span",
+            { class: "symbol" },
+            icon(kind === "voice" ? "volume" : "hash", 20),
+          ),
           node("span", { class: "channel-name" }, r.name),
         );
         if (activeVoice === r.id)
           b.append(node("span", { class: "badge" }, "接続中"));
         channels.append(b);
+        if (kind === "voice")
+          for (const entry of state.voice ?? []) {
+            if (entry.room !== r.id) continue;
+            const u = users.get(entry.user);
+            if (!u) continue;
+            const row = button("", () => memberDialog(u), "voice-member");
+            row.append(avatar(u), node("span", {}, u.display));
+            if (entry.user === me.id && preferences().muted)
+              row.append(icon("micOff", 14));
+            channels.append(row);
+          }
       }
     }
     if (owner && g.requests.length) {
@@ -288,7 +384,7 @@ function renderNav() {
     }
   } else {
     const h = node("div", { class: "section-label" }, "ダイレクトメッセージ");
-    h.append(button("＋", newDM));
+    h.append(iconButton("plus", "DM を開始", newDM));
     channels.append(h);
     for (const r of state.dms) {
       const other = users.get(r.users.find((id) => id !== me.id));
@@ -316,13 +412,22 @@ function renderNav() {
       ? users.get(r.users.find((id) => id !== me.id)).display
       : r.name
     : (g?.name ?? "ダイレクトメッセージ");
-  $("#room-symbol").textContent = r?.kind === "dm" ? "@" : "#";
+  $("#room-symbol").replaceChildren(
+    icon(
+      r?.kind === "dm" ? "users" : r?.kind === "voice" ? "volume" : "hash",
+      24,
+    ),
+  );
   $("#call").hidden = !r || r.kind === "text";
   $("#composer-area").hidden = !r || r.kind === "voice";
-  $("#encryption-status").textContent = r
-    ? "端末間暗号化 · 署名検証"
-    : "端末間暗号化";
-  $("#message-input").placeholder = r ? "メッセージを送信" : "チャンネルを選択";
+  $("#message-input").placeholder = r
+    ? (r.kind === "dm" ? "@" : "#") +
+      $("#room-name").textContent +
+      " へメッセージを送信"
+    : "メッセージを送信";
+  $(".main").classList.toggle("voice-view", r?.kind === "voice");
+  $("#call-stage").hidden = !(activeVoice && r?.id === activeVoice);
+  $("#stage-controls").hidden = !(activeVoice && r?.id === activeVoice);
   $("#pins").classList.toggle("active", pinsOnly);
 }
 const drafts = new Map();
@@ -397,15 +502,7 @@ function renderMembers() {
         "div",
         {},
         node("strong", {}, u.display ?? u.username),
-        node(
-          "small",
-          {},
-          u.role === "owner"
-            ? "所有者"
-            : storage.verified[u.id]
-              ? "指紋を確認済み"
-              : "指紋を未確認",
-        ),
+        node("small", {}, u.role === "owner" ? "所有者" : "@" + u.username),
       ),
     );
     panel.append(b);
@@ -570,17 +667,25 @@ function renderMessages() {
   const old = area.scrollTop;
   area.replaceChildren();
   const r = currentRoom();
+  if (r?.kind === "voice") {
+    if (activeVoice !== r.id)
+      area.append(
+        node(
+          "div",
+          { class: "voice-empty" },
+          node("div", { class: "voice-empty-icon" }, icon("volume", 52)),
+          node("h2", {}, r.name),
+          button("通話に参加", () => joinVoice(r.id), "primary"),
+        ),
+      );
+    return;
+  }
   if (!r) {
     const welcome = node(
       "div",
       { class: "welcome" },
-      node("div", { class: "welcome-icon" }, "@"),
+      node("div", { class: "welcome-icon" }, icon("users", 34)),
       node("h2", {}, "ダイレクトメッセージ"),
-      node(
-        "p",
-        {},
-        "相手のユーザー名を指定して会話を開始。サーバーは1人1個作成できる。",
-      ),
       button("DM を開始", newDM, "primary"),
       button("サーバーを作成", createGuild),
     );
@@ -598,7 +703,11 @@ function renderMessages() {
       node(
         "div",
         { class: "welcome" },
-        node("div", { class: "welcome-icon" }, r.kind === "dm" ? "@" : "#"),
+        node(
+          "div",
+          { class: "welcome-icon" },
+          icon(r.kind === "dm" ? "users" : "hash", 34),
+        ),
         node(
           "h2",
           {},
@@ -607,13 +716,6 @@ function renderMessages() {
             : query
               ? "一致するメッセージはない"
               : $("#room-name").textContent,
-        ),
-        node(
-          "p",
-          {},
-          r.kind === "voice"
-            ? "通話に参加するとマイク・カメラ・画面共有を利用できる。"
-            : "この会話のメッセージは、参加者の端末で暗号化・復号する。",
         ),
       ),
     );
@@ -630,7 +732,7 @@ function renderMessages() {
       area.append(node("div", { class: "date-divider" }, nextDay));
       day = nextDay;
     }
-    const u = m.authorUser ?? users.get(m.author),
+    const u = users.get(m.author) ?? m.authorUser,
       content = node("div", { class: "message-content" }),
       row = node("article", {
         class: "message",
@@ -661,13 +763,10 @@ function renderMessages() {
           date.toLocaleTimeString("ja-JP", {
             hour: "2-digit",
             minute: "2-digit",
+            hour12: preferences().timeFormat === "12",
           }),
         ),
-        node(
-          "span",
-          { class: m.invalid ? "error" : "verified" },
-          m.invalid ? "検証失敗" : "署名確認済み",
-        ),
+        m.invalid ? node("span", { class: "error" }, "検証失敗") : null,
       ),
     );
     const text = richText(m.text);
@@ -684,7 +783,7 @@ function renderMessages() {
             "div",
             {},
             node("strong", {}, String(f.name)),
-            node("small", {}, formatSize(f.size) + " · 暗号化済み"),
+            node("small", {}, formatSize(f.size)),
           ),
           button("保存", () => downloadFile(f)),
         );
@@ -907,74 +1006,41 @@ async function createGuild() {
 function guildActions() {
   const g = currentGuild();
   if (!g) return;
-  const body = node("div");
-  body.append(node("p", {}, "サーバー ID: " + g.id));
+  const menu = $("#guild-menu");
+  if (!menu.hidden) {
+    menu.hidden = true;
+    return;
+  }
+  menu.replaceChildren();
+  function item(label, name, fn, cls = "") {
+    const el = button(
+      "",
+      async () => {
+        menu.hidden = true;
+        await fn();
+      },
+      "guild-menu-item " + cls,
+    );
+    el.append(node("span", {}, label), icon(name, 20));
+    menu.append(el);
+  }
+  if (g.owner === me.id) item("友達を招待", "users", inviteDialog);
+  item("サーバー設定", "settings", () => settingsUI.server());
   if (g.owner === me.id) {
-    body.append(
-      node(
-        "div",
-        { class: "buttons" },
-        button("招待リンクを作成", inviteDialog),
-        button("サーバー名を変更", () =>
-          prompt("サーバー名を変更", "名前", g.name, async (name) => {
-            await api("/guilds/" + g.id, { name }, "PATCH");
-            await refresh();
-          }),
-        ),
-        button("招待を全失効", () =>
-          confirmAction("すべての招待リンクを無効にする", () =>
-            api("/guilds/" + g.id + "/invites", {}, "DELETE"),
-          ),
-        ),
-        button(
-          "サーバーを削除",
-          () =>
-            confirmAction("サーバーと保存済み会話を削除する", async () => {
-              await api("/guilds/" + g.id, {}, "DELETE");
-              guildId = null;
-              roomId = null;
-              await refresh();
-            }),
-          "danger",
-        ),
-      ),
-    );
-    const r = currentRoom();
-    if (r?.guild === g.id)
-      body.append(
-        node(
-          "div",
-          { class: "buttons" },
-          button("チャンネル名を変更", () =>
-            prompt("チャンネル名", "名前", r.name, async (name) => {
-              await api("/rooms/" + r.id, { name }, "PATCH");
-              await refresh();
-            }),
-          ),
-          button(
-            "チャンネルを削除",
-            () =>
-              confirmAction("このチャンネルと会話を削除する", async () => {
-                await api("/rooms/" + r.id, {}, "DELETE");
-                roomId = null;
-                await refresh();
-              }),
-            "danger",
-          ),
-        ),
+    item("チャンネルを作成", "plus", () => newChannel("text"));
+    if (g.requests.length)
+      item("参加申請 · " + g.requests.length, "users", () =>
+        settingsUI.server("members"),
       );
-  } else
-    body.append(
-      node(
-        "p",
-        {},
-        "招待リンクの作成とメンバーの変更は所有者が操作する。退出は所有者にメンバー削除を依頼して。",
-      ),
-    );
-  modal(g.name, body);
+  }
+  const rect = $(".side-header").getBoundingClientRect();
+  menu.style.left = rect.left + 8 + "px";
+  menu.style.top = rect.bottom + 7 + "px";
+  menu.style.width = rect.width - 16 + "px";
+  menu.hidden = false;
 }
 function confirmAction(title, fn) {
-  modal(title, node("p", {}, "この操作を実行する。"), fn, "実行");
+  modal(title, node("p", {}, "この操作を実行する？"), fn, "実行");
 }
 async function inviteDialog() {
   const g = currentGuild(),
@@ -986,11 +1052,7 @@ async function inviteDialog() {
     encodeURIComponent(C.b64(C.bytes(JSON.stringify(data))));
   const input = node("textarea", { rows: 5, readonly: true }, url);
   modal("招待リンク", [
-    node(
-      "p",
-      {},
-      "有効期限は24時間。リンクを渡した相手の参加申請を確認して承認する。",
-    ),
+    node("p", {}, "有効期限：24時間"),
     input,
     button("コピー", async () => {
       await navigator.clipboard.writeText(url);
@@ -1102,50 +1164,78 @@ function newDM() {
   );
 }
 async function memberDialog(u) {
-  const fp = await C.fingerprint(u.keys),
-    body = node(
+  const profile = u.profile ?? {},
+    card = node(
       "div",
-      {},
-      node("p", {}, "@" + u.username),
-      node("div", { class: "fingerprint" }, fp),
-      node("p", {}, "別の連絡手段で同じ指紋が表示されていることを確認して。"),
+      { class: "member-profile-card" },
+      node("div", { class: "member-profile-banner" }),
+      avatar(u),
+      node("h3", {}, u.display),
+      node("small", {}, "@" + u.username),
+      node("p", {}, profile.pronouns ?? ""),
+      node("p", {}, profile.bio ?? ""),
     );
-  body.append(
-    button(
-      storage.verified[u.id] ? "確認済みを解除" : "指紋の一致を確認した",
-      () => {
-        storage.verified[u.id] = !storage.verified[u.id];
-        saveTrust();
-        renderMembers();
-        $("#modal").close();
-      },
-    ),
-  );
+  card.querySelector(".member-profile-banner").style.background =
+    profile.bannerColor ?? "#8b7cf8";
+  const actions = node("div", { class: "buttons" });
   if (u.id !== me.id)
-    body.append(
-      button("DM を開始", async () => {
-        const { id } = await api("/dms", { user: u.id });
-        pinDMPeers(id, [me.id, u.id]);
-        guildId = null;
+    actions.append(
+      button(
+        "メッセージ",
+        async () => {
+          const { id } = await api("/dms", { user: u.id });
+          pinDMPeers(id, [me.id, u.id]);
+          guildId = null;
+          $("#modal").close();
+          await refresh();
+          await selectRoom(id);
+        },
+        "primary",
+      ),
+    );
+  else
+    actions.append(
+      button("プロフィールを編集", () => {
         $("#modal").close();
-        await refresh();
-        await selectRoom(id);
+        settingsUI.user("profile");
       }),
     );
+  actions.append(
+    button("公開鍵を確認", async () => {
+      const fp = await C.fingerprint(u.keys);
+      modal("公開鍵の指紋", [
+        node("div", { class: "fingerprint" }, fp),
+        button(
+          storage.verified[u.id] ? "確認済みを解除" : "一致を確認した",
+          () => {
+            storage.verified[u.id] = !storage.verified[u.id];
+            saveTrust();
+            renderMembers();
+            $("#modal").close();
+          },
+        ),
+      ]);
+    }),
+  );
   if (currentGuild()?.owner === me.id && u.id !== me.id)
-    body.append(
+    actions.append(
       button(
-        "メンバーから削除",
+        "メンバーを削除",
         () =>
-          confirmAction(u.display + " をメンバーから削除", () =>
-            updateRoster(
-              currentGuild().roster.members.filter((m) => m.id !== u.id),
-            ),
+          modal(
+            "メンバーを削除",
+            node("p", {}, u.display),
+            () =>
+              updateRoster(
+                currentGuild().roster.members.filter((m) => m.id !== u.id),
+              ),
+            "削除",
           ),
         "danger",
       ),
     );
-  modal(u.display, body);
+  card.append(actions);
+  modal(u.display, card);
 }
 function reactionDialog(m) {
   const body = node("div", { class: "buttons" });
@@ -1176,11 +1266,7 @@ function editMessage(m) {
 function deleteMessage(m) {
   modal(
     "メッセージを削除",
-    node(
-      "p",
-      {},
-      "削除イベントを暗号化して送信する。受信者が保存したコピーやサーバー内の過去の暗号文までは消去できない。",
-    ),
+    node("p", {}, "このメッセージを削除する？"),
     async () => {
       await sendPayload({ type: "delete", target: m.id });
       for (const f of m.files ?? [])
@@ -1195,40 +1281,7 @@ function deleteMessage(m) {
   );
 }
 async function settings() {
-  const fp = await C.fingerprint(me.keys),
-    body = node(
-      "div",
-      {},
-      node("p", {}, "自分の公開鍵の指紋"),
-      node("div", { class: "fingerprint" }, fp),
-      node(
-        "p",
-        {},
-        "暗号化: AES-256-GCM / 鍵配送: ECDH P-256 + HKDF-SHA-256 / 署名: ECDSA P-256。運営には参加者・時刻・通信量が見える。公開鍵は初回に固定する方式で、公開透明性ログと前方秘匿性は未実装。",
-      ),
-      node(
-        "div",
-        { class: "buttons" },
-        button("表示名を変更", () =>
-          prompt(
-            "表示名を変更",
-            "表示名",
-            state.me.display,
-            async (display) => {
-              await api("/me", { display }, "PATCH");
-              await refresh();
-            },
-          ),
-        ),
-        button("通知を許可", async () => {
-          if (!("Notification" in window)) throw Error("通知非対応");
-          await Notification.requestPermission();
-        }),
-        button("鍵のバックアップ", backup),
-        button("ログアウト", logout, "danger"),
-      ),
-    );
-  modal("ユーザー設定・暗号化", body);
+  settingsUI.user();
 }
 async function backup() {
   const data = {
@@ -1259,6 +1312,9 @@ async function logout() {
   ws = null;
   await api("/auth/logout", {});
   me = null;
+  for (const cached of imageCache.values())
+    cached.then((url) => URL.revokeObjectURL(url)).catch(() => {});
+  imageCache.clear();
   histories.clear();
   drafts.clear();
   attachments = [];
@@ -1271,6 +1327,7 @@ async function logout() {
   $("#auth").hidden = false;
   $("#modal").close();
   $("#password").value = "";
+  if (registering) $("#auth-switch").click();
 }
 function connect() {
   if (!me) return;
@@ -1298,18 +1355,41 @@ function connect() {
         if (m.online) state.online.push(m.user);
         renderMembers();
       }
+      if (m.type === "voice-presence" && state) {
+        const previous = (state.voice ?? [])
+          .filter((v) => v.room === m.room)
+          .map((v) => v.user);
+        state.voice = [
+          ...(state.voice ?? []).filter((v) => v.room !== m.room),
+          ...m.users.map((user) => ({ room: m.room, user })),
+        ];
+        if (
+          activeVoice === m.room &&
+          m.users.some((id) => id !== me.id && !previous.includes(id))
+        )
+          sound("peerJoin");
+        renderNav();
+      }
       if (m.type === "voice-replaced") await leaveVoice();
       if (m.type === "event") {
+        if (
+          (m.room !== roomId || document.hidden) &&
+          state.me.profile?.status !== "dnd" &&
+          m.author !== me.id
+        )
+          sound("message");
         if (m.room !== roomId) {
           unread.add(m.room);
           renderNav();
           if (
             "Notification" in window &&
+            preferences().desktopNotifications &&
+            state.me.profile?.status !== "dnd" &&
             Notification.permission === "granted" &&
             document.hidden
           )
             new Notification("Oisiicord", {
-              body: "新しい暗号化メッセージ",
+              body: "新しいメッセージ",
               icon: "/icon.svg",
             });
         } else await loadHistory(m.room);
@@ -1322,7 +1402,17 @@ function connect() {
         for (const id of [...new Set(m.users)])
           if (id !== me.id) await createPeer(id, true);
       if (m.type === "signal") await handleSignal(m);
-      if (m.type === "voice-left" && m.room === activeVoice) removePeer(m.user);
+      if (m.type === "voice-left") {
+        if (state)
+          state.voice = (state.voice ?? []).filter(
+            (v) => !(v.room === m.room && v.user === m.user),
+          );
+        if (m.room === activeVoice && m.user !== me.id) {
+          sound("peerLeave");
+          removePeer(m.user);
+        }
+        renderNav();
+      }
       if (m.type === "error") toast(m.message);
     });
 }
@@ -1361,16 +1451,38 @@ async function joinVoice(id) {
   }
   if (ws?.readyState !== 1) throw Error("接続完了後に通話して");
   await leaveVoice();
-  localStream = await navigator.mediaDevices.getUserMedia({
-    audio: { echoCancellation: true, noiseSuppression: true },
+  const p = preferences();
+  const source = await navigator.mediaDevices.getUserMedia({
+    audio: {
+      deviceId: p.inputDevice ? { exact: p.inputDevice } : undefined,
+      echoCancellation: p.echoCancellation,
+      noiseSuppression: p.noiseSuppression,
+      autoGainControl: p.autoGainControl,
+    },
     video: false,
   });
+  voiceAudio = new AudioContext();
+  voiceInput = source;
+  voiceGain = voiceAudio.createGain();
+  voiceGain.gain.value = p.inputVolume / 100;
+  voiceSource = voiceAudio.createMediaStreamSource(source);
+  voiceSource.connect(voiceGain);
+  const destination = voiceAudio.createMediaStreamDestination();
+  voiceGain.connect(destination);
+  localStream = destination.stream;
+  await voiceAudio.resume();
+  localStream
+    .getAudioTracks()
+    .forEach((t) => (t.enabled = !p.muted && !p.deafened));
   activeVoice = id;
   await selectRoom(id);
   $("#voice-controls").hidden = false;
-  $("#voice-status").textContent = "音声通話 · 暗号化";
+  $("#voice-status").textContent = "通話接続済み";
+  $("#voice-channel-name").textContent = currentRoom()?.name ?? "通話";
+  sound("join");
   $("#call-stage").hidden = false;
   addTile(me.id, localStream, true);
+  syncVoiceControls();
   ws.send(JSON.stringify({ type: "join-voice", room: id }));
   renderNav();
 }
@@ -1380,15 +1492,49 @@ function addTile(id, stream, local = false) {
     tile = node(
       "div",
       { class: "call-tile", id: "call-" + id },
+      node("div", { class: "call-avatar" }, avatar(users.get(id))),
       node("video", { autoplay: true, playsinline: true }),
       node("span", {}, users.get(id)?.display ?? "ユーザー"),
     );
     $("#call-stage").append(tile);
   }
+  monitorVoice(id, stream, tile);
   const v = tile.querySelector("video");
   v.muted = local;
-  v.srcObject = stream;
-  v.play().catch(() => toast("通話音声を再生するには画面を操作して"));
+  if (v.srcObject !== stream) v.srcObject = stream;
+  function videoState() {
+    tile.classList.toggle(
+      "has-video",
+      stream
+        .getVideoTracks()
+        .some((t) => t.enabled && !t.muted && t.readyState === "live"),
+    );
+  }
+  for (const track of stream.getVideoTracks()) {
+    track.addEventListener("mute", videoState);
+    track.addEventListener("unmute", videoState);
+    track.addEventListener("ended", videoState);
+  }
+  videoState();
+  if (!local) {
+    v.volume = preferences().deafened ? 0 : preferences().outputVolume / 100;
+    if (v.setSinkId && preferences().outputDevice)
+      v.setSinkId(preferences().outputDevice).catch(() => {});
+  }
+  v.play().catch((error) => {
+    if (
+      error.name !== "NotAllowedError" ||
+      local ||
+      tile.querySelector(".play-audio")
+    )
+      return;
+    const play = iconButton("volume", "音声を再生", async () => {
+      await v.play();
+      play.remove();
+    });
+    play.classList.add("play-audio");
+    tile.append(play);
+  });
 }
 async function createPeer(id, initiator = false) {
   if (peers.has(id)) return peers.get(id);
@@ -1471,39 +1617,89 @@ async function handleSignal(m) {
     else entry.candidates.push(payload.candidate);
   }
 }
+const voiceMeters = new Map();
+function stopMeter(id) {
+  const meter = voiceMeters.get(id);
+  if (meter) {
+    cancelAnimationFrame(meter.frame);
+    meter.source.disconnect();
+    voiceMeters.delete(id);
+  }
+}
+function monitorVoice(id, stream, tile) {
+  if (!voiceAudio || voiceMeters.get(id)?.stream === stream) return;
+  stopMeter(id);
+  try {
+    const source = voiceAudio.createMediaStreamSource(stream),
+      analyser = voiceAudio.createAnalyser();
+    analyser.fftSize = 256;
+    source.connect(analyser);
+    const meter = { source, stream, frame: 0 },
+      values = new Uint8Array(256);
+    voiceMeters.set(id, meter);
+    function update() {
+      if (!activeVoice || !tile.isConnected) {
+        stopMeter(id);
+        return;
+      }
+      analyser.getByteTimeDomainData(values);
+      const level = Math.sqrt(
+        values.reduce((s, v) => s + ((v - 128) / 128) ** 2, 0) / values.length,
+      );
+      tile.classList.toggle("speaking", level > 0.015);
+      meter.frame = requestAnimationFrame(update);
+    }
+    meter.frame = requestAnimationFrame(update);
+  } catch {}
+}
 function removePeer(id) {
+  stopMeter(id);
   const p = peers.get(id);
   p?.pc.close();
   peers.delete(id);
   document.getElementById("call-" + id)?.remove();
 }
 async function leaveVoice() {
+  if (activeVoice) sound("leave");
+  for (const id of [...voiceMeters.keys()]) stopMeter(id);
+  voiceInput?.getTracks().forEach((t) => t.stop());
+  voiceInput = null;
+  voiceSource = null;
+  if (voiceAudio) {
+    if (voiceAudio.state !== "closed") voiceAudio.close().catch(() => {});
+    voiceAudio = null;
+    voiceGain = null;
+  }
   if (ws?.readyState === 1 && activeVoice)
     ws.send(JSON.stringify({ type: "leave-voice" }));
   for (const id of [...peers.keys()]) removePeer(id);
   localStream?.getTracks().forEach((t) => t.stop());
   videoTrack?.stop();
   videoTrack = null;
+  videoMode = null;
   localStream = null;
   activeVoice = null;
   $("#voice-controls").hidden = true;
   $("#call-stage").hidden = true;
   $("#call-stage").replaceChildren();
-  $("#mute").textContent = "マイク";
-  $("#camera").textContent = "カメラ";
-  if (state) renderNav();
+  syncVoiceControls();
+  if (state) {
+    renderNav();
+    renderMessages();
+  }
 }
 async function setVideo(mode) {
   if (!activeVoice) throw Error("通話に参加して");
-  if (videoTrack) {
+  if (videoTrack && videoMode === mode) {
     videoTrack.stop();
     videoTrack = null;
+    videoMode = null;
     for (const p of peers.values()) await p.video.replaceTrack(null);
-    $("#camera").textContent = "カメラ";
-    $("#share").textContent = "画面共有";
     addTile(me.id, localStream, true);
+    syncVoiceControls();
     return;
   }
+  const prefs = preferences();
   const stream =
     mode === "screen"
       ? await navigator.mediaDevices.getDisplayMedia({
@@ -1511,24 +1707,188 @@ async function setVideo(mode) {
           audio: false,
         })
       : await navigator.mediaDevices.getUserMedia({
-          video: true,
+          video: {
+            deviceId: prefs.cameraDevice
+              ? { exact: prefs.cameraDevice }
+              : undefined,
+            width: {
+              ideal: Number(prefs.videoResolution) === 1080 ? 1920 : 1280,
+            },
+            height: { ideal: Number(prefs.videoResolution) },
+          },
           audio: false,
         });
+  const previous = videoTrack;
   videoTrack = stream.getVideoTracks()[0];
-  videoTrack.onended = () =>
+  videoMode = mode;
+  previous?.stop();
+  const thisTrack = videoTrack;
+  videoTrack.addEventListener("ended", () =>
     guard(async () => {
+      if (videoTrack !== thisTrack) return;
       videoTrack = null;
+      videoMode = null;
       for (const p of peers.values()) await p.video.replaceTrack(null);
       addTile(me.id, localStream, true);
-    });
+      syncVoiceControls();
+    }),
+  );
   for (const p of peers.values()) await p.video.replaceTrack(videoTrack);
   addTile(
     me.id,
     new MediaStream([...localStream.getAudioTracks(), videoTrack]),
     true,
   );
-  $("#" + (mode === "screen" ? "share" : "camera")).textContent = "停止";
+  syncVoiceControls();
 }
+
+let voiceAudio = null,
+  voiceSource = null,
+  voiceGain = null,
+  voiceInput = null;
+function iconButton(name, label, fn) {
+  const el = button("", fn, "icon-button");
+  setIcon(el, name, label);
+  return el;
+}
+function syncVoiceControls() {
+  const p = preferences();
+  for (const id of ["mute", "stage-mute"])
+    setIcon(
+      $("#" + id),
+      p.muted || p.deafened ? "micOff" : "mic",
+      p.muted ? "マイクのミュートを解除" : "マイクをミュート",
+    );
+  setIcon(
+    $("#deafen"),
+    p.deafened ? "headphonesOff" : "headphones",
+    p.deafened ? "スピーカーのミュートを解除" : "スピーカーをミュート",
+  );
+  for (const id of ["camera", "stage-camera"])
+    setIcon($("#" + id), "camera", videoTrack ? "映像を停止" : "カメラ");
+  for (const id of ["share", "stage-share"])
+    setIcon($("#" + id), "screen", "画面共有");
+  $("#mute").classList.toggle("toggled", p.muted || p.deafened);
+  $("#deafen").classList.toggle("toggled", p.deafened);
+  for (const id of ["camera", "stage-camera", "share", "stage-share"])
+    $("#" + id).classList.toggle(
+      "toggled",
+      !!videoTrack &&
+        (id.includes("camera")
+          ? videoMode === "camera"
+          : videoMode === "screen"),
+    );
+}
+function toggleMute() {
+  updatePreferences({ muted: !preferences().muted });
+  sound(preferences().muted ? "mute" : "unmute");
+}
+const settingsUI = createSettings({
+  node,
+  button,
+  api,
+  toast,
+  guard,
+  modal,
+  prompt,
+  avatar,
+  uploadImage: uploadProfileImage,
+  backup,
+  logout,
+  refresh,
+  renderMessages,
+  updateRoster,
+  inviteDialog,
+  newChannel,
+  approveDialog,
+  getState: () => state,
+  getMe: () => me,
+  getGuild: currentGuild,
+  getRoom: currentRoom,
+  getUser: (id) => users.get(id),
+});
+for (const [id, name, label] of [
+  ["add-guild", "plus", "サーバー作成・招待から参加"],
+  ["side-menu", "chevron", "サーバーメニュー"],
+  ["profile-settings", "settings", "ユーザー設定"],
+  ["mobile-channels", "menu", "チャンネルを表示"],
+  ["call", "phone", "音声通話"],
+  ["pins", "pin", "ピン留め"],
+  ["toggle-members", "users", "メンバー"],
+  ["attach", "plusCircle", "ファイルを添付"],
+  ["emoji", "smile", "絵文字"],
+  ["send", "send", "送信"],
+  ["modal-close", "close", "閉じる"],
+  ["hangup", "hangup", "通話から退出"],
+  ["stage-hangup", "hangup", "通話から退出"],
+  ["voice-indicator", "volume", "接続済み"],
+])
+  setIcon($("#" + id), name, label);
+syncVoiceControls();
+$("#deafen").onclick = () =>
+  updatePreferences({ deafened: !preferences().deafened });
+$("#stage-mute").onclick = toggleMute;
+$("#stage-hangup").onclick = () => guard(leaveVoice);
+$("#stage-camera").onclick = () => guard(() => setVideo("camera"));
+$("#stage-share").onclick = () => guard(() => setVideo("screen"));
+$("#my-profile").onclick = () => settingsUI.user("profile");
+window.addEventListener("preferenceschange", (event) => {
+  if (
+    activeVoice &&
+    [
+      "inputDevice",
+      "echoCancellation",
+      "noiseSuppression",
+      "autoGainControl",
+    ].some((key) => key in event.detail)
+  )
+    guard(async () => {
+      const p = preferences(),
+        source = await navigator.mediaDevices.getUserMedia({
+          audio: {
+            deviceId: p.inputDevice ? { exact: p.inputDevice } : undefined,
+            echoCancellation: p.echoCancellation,
+            noiseSuppression: p.noiseSuppression,
+            autoGainControl: p.autoGainControl,
+          },
+        });
+      if (!voiceAudio || !activeVoice) {
+        source.getTracks().forEach((t) => t.stop());
+        return;
+      }
+      voiceSource?.disconnect();
+      voiceInput?.getTracks().forEach((t) => t.stop());
+      voiceInput = source;
+      voiceSource = voiceAudio.createMediaStreamSource(source);
+      voiceSource.connect(voiceGain);
+    });
+  const p = preferences();
+  syncVoiceControls();
+  localStream
+    ?.getAudioTracks()
+    .forEach((t) => (t.enabled = !p.muted && !p.deafened));
+  if (voiceGain) voiceGain.gain.value = p.inputVolume / 100;
+  for (const el of document.querySelectorAll(".call-tile video")) {
+    if (el.muted) continue;
+    el.volume = p.deafened ? 0 : p.outputVolume / 100;
+    if (el.setSinkId) el.setSinkId(p.outputDevice).catch(() => {});
+  }
+  if (roomId) renderMessages();
+});
+document.addEventListener("keydown", (e) => {
+  if (e.ctrlKey && e.shiftKey && e.code === "KeyM") {
+    e.preventDefault();
+    toggleMute();
+  }
+  if (e.ctrlKey && e.shiftKey && e.code === "KeyD") {
+    e.preventDefault();
+    updatePreferences({ deafened: !preferences().deafened });
+  }
+});
+document.addEventListener("pointerdown", (e) => {
+  if (!$("#guild-menu").contains(e.target) && !e.target.closest(".side-header"))
+    $("#guild-menu").hidden = true;
+});
 $("#auth-switch").onclick = () => {
   registering = !registering;
   $("#auth-title").textContent = registering ? "アカウント作成" : "ログイン";
@@ -1547,7 +1907,7 @@ $("#auth-form").onsubmit = async (e) => {
   e.preventDefault();
   const submit = $("#auth-submit");
   submit.disabled = true;
-  submit.textContent = "鍵を処理中…";
+  submit.textContent = "ログイン中…";
   $("#auth-error").textContent = "";
   try {
     if (!isSecureContext || !crypto.subtle)
@@ -1590,6 +1950,8 @@ $("#auth-form").onsubmit = async (e) => {
       salt,
       vault: result.vault,
     };
+    loadPreferences(me.id);
+    syncVoiceControls();
     storage = JSON.parse(
       localStorage.getItem("oisiicord-trust-" + me.id) ??
         '{"pins":{},"versions":{},"verified":{}}',
@@ -1665,7 +2027,12 @@ $("#file-input").onchange = () =>
     renderAttachments();
   });
 $("#message-input").onkeydown = (e) => {
-  if (e.key === "Enter" && !e.shiftKey && !e.isComposing) {
+  if (
+    e.key === "Enter" &&
+    !e.shiftKey &&
+    !e.isComposing &&
+    (preferences().enterToSend || e.ctrlKey || e.metaKey)
+  ) {
     e.preventDefault();
     $("#composer").requestSubmit();
   }
@@ -1708,12 +2075,7 @@ $("#modal-close").onclick = () => $("#modal").close();
 $("#modal-cancel").onclick = () => $("#modal").close();
 $("#call").onclick = () => guard(() => joinVoice(roomId));
 $("#hangup").onclick = () => guard(leaveVoice);
-$("#mute").onclick = () => {
-  if (!localStream) return;
-  const t = localStream.getAudioTracks()[0];
-  t.enabled = !t.enabled;
-  $("#mute").textContent = t.enabled ? "マイク" : "ミュート中";
-};
+$("#mute").onclick = toggleMute;
 $("#camera").onclick = () => guard(() => setVideo("camera"));
 $("#share").onclick = () => guard(() => setVideo("screen"));
 window.addEventListener("focus", () => {

@@ -7,6 +7,8 @@ export function database(path: string) {
   db.exec(`PRAGMA journal_mode=WAL; PRAGMA foreign_keys=ON; PRAGMA busy_timeout=5000;
     CREATE TABLE IF NOT EXISTS users(id TEXT PRIMARY KEY, username TEXT UNIQUE NOT NULL, display TEXT NOT NULL,
       salt TEXT NOT NULL, auth TEXT NOT NULL, vault TEXT NOT NULL, keys TEXT NOT NULL, created INTEGER NOT NULL);
+    CREATE TABLE IF NOT EXISTS profiles(user TEXT PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE, data TEXT NOT NULL);
+    CREATE TABLE IF NOT EXISTS guild_profiles(guild TEXT PRIMARY KEY REFERENCES guilds(id) ON DELETE CASCADE, data TEXT NOT NULL);
     CREATE TABLE IF NOT EXISTS sessions(token TEXT PRIMARY KEY, user TEXT NOT NULL REFERENCES users(id), expires INTEGER NOT NULL);
     CREATE TABLE IF NOT EXISTS guilds(id TEXT PRIMARY KEY, owner TEXT UNIQUE NOT NULL REFERENCES users(id), name TEXT NOT NULL,
       roster TEXT NOT NULL, signature TEXT NOT NULL, version INTEGER NOT NULL);

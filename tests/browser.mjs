@@ -93,9 +93,7 @@ try {
   await page.getByRole("button", { name: "ピン", exact: true }).last().click();
   await page.getByText("ピン留め済み", { exact: true }).waitFor();
   await page.locator("#side-menu").click();
-  await page
-    .getByRole("button", { name: "招待リンクを作成", exact: true })
-    .click();
+  await page.getByRole("button", { name: "友達を招待", exact: true }).click();
   const invite = await page.locator("#modal-body textarea").inputValue();
   await page.locator("#modal-close").click();
   const c2 = await browser.newContext({
@@ -113,7 +111,7 @@ try {
   await p2.getByRole("button", { name: "参加申請", exact: true }).click();
   await page.getByRole("button", { name: "Bob を確認", exact: true }).click();
   await page.getByRole("button", { name: "承認", exact: true }).click();
-  await p2.getByRole("button", { name: "OI", exact: true }).click();
+  await p2.getByRole("button", { name: "Oisiicord 開発", exact: true }).click();
   await p2
     .getByRole("heading", { name: "一般", exact: true, level: 1 })
     .waitFor();

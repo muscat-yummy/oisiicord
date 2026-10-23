@@ -11,7 +11,8 @@
     "dev": "bun --watch src/server.ts",
     "test": "bun test",
     "check": "tsc --noEmit",
-    "test:browser": "bun tests/browser.mjs"
+    "test:browser": "bun tests/browser.mjs",
+    "test:interface": "bun tests/interface.mjs"
   },
   "devDependencies": {
     "@types/bun": "^1.3.0",
