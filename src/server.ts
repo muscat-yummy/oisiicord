@@ -1,4 +1,5 @@
 import { database } from "./db";
+import { prepareStorage } from "./storage";
 import { canonical, verify, fingerprint } from "../public/crypto.js";
 import { resolve } from "node:path";
 
@@ -33,11 +34,11 @@ export function createApp(
     fileOrigin?: string;
   } = {},
 ) {
-  const db = database(
-    options.path ?? process.env.DATABASE_PATH ?? "./data/oisiicord.sqlite",
-  );
-  const origin =
-    options.origin ?? process.env.APP_ORIGIN ?? "http://localhost:3000";
+  const storage = options.path === undefined ? prepareStorage() : undefined;
+  const env = { ...process.env, ...storage?.env };
+  const databasePath = options.path ?? storage!.databasePath;
+  const db = database(databasePath, storage?.backupDir);
+  const origin = options.origin ?? env.APP_ORIGIN ?? "http://localhost:3000";
   const site = new URL(origin);
   if (
     site.protocol !== "https:" &&
@@ -299,7 +300,7 @@ export function createApp(
             .map((s) => s.data.user),
         ),
       ].filter((id) => ids.has(id)),
-      iceServers: JSON.parse(process.env.ICE_SERVERS ?? "[]"),
+      iceServers: JSON.parse(env.ICE_SERVERS ?? "[]"),
       voice: [...sockets]
         .filter((s) => s.data.voice && sessionValid(s.data))
         .map((s) => ({ room: s.data.voice, user: s.data.user }))
@@ -1173,8 +1174,8 @@ export function createApp(
     timeCost: 3,
   });
   const server = Bun.serve<WSData>({
-    port: options.port ?? Number(process.env.PORT ?? 3000),
-    hostname: options.hostname ?? process.env.HOST ?? "127.0.0.1",
+    port: options.port ?? Number(env.PORT ?? 3000),
+    hostname: options.hostname ?? env.HOST ?? "127.0.0.1",
     maxRequestBodySize: 26 * 1024 * 1024,
     async fetch(req, server) {
       try {
@@ -1329,6 +1330,8 @@ export function createApp(
   return {
     server,
     db,
+    origin,
+    databasePath,
     stop() {
       clearInterval(maintenance);
       server.stop(true);
@@ -1339,6 +1342,6 @@ export function createApp(
 if (import.meta.main) {
   const app = createApp();
   console.log(
-    `Oisiicord: ${process.env.APP_ORIGIN ?? "http://localhost:3000"} (port ${app.server.port})`,
+    `Oisiicord: ${app.origin} (port ${app.server.port})\nDB: ${app.databasePath}`,
   );
 }

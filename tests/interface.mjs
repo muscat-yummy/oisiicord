@@ -18,6 +18,7 @@ const child = spawn(bun, ["src/server.ts"], {
     PORT: "31996",
     APP_ORIGIN: origin,
     DATABASE_PATH: resolve(temp, "test.sqlite"),
+    OISIICORD_DATA_DIR: resolve(temp, "storage"),
   },
 });
 child.stderr.on("data", (d) => process.stderr.write(d));

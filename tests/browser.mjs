@@ -16,6 +16,7 @@ const child = spawn(process.execPath, ["src/server.ts"], {
     PORT: "31998",
     APP_ORIGIN: "http://localhost:31998",
     DATABASE_PATH: resolve(temp, "test.sqlite"),
+    OISIICORD_DATA_DIR: resolve(temp, "storage"),
   },
 });
 process.on("exit", () => child.kill());

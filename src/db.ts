@@ -1,11 +1,28 @@
 import { Database } from "bun:sqlite";
-import { mkdirSync } from "node:fs";
+import { existsSync, mkdirSync } from "node:fs";
+import { backupDatabase } from "./storage";
 import { dirname } from "node:path";
-export function database(path: string) {
+export const SCHEMA_VERSION = 1;
+export function database(path: string, backupDir?: string) {
+  const existing = path !== ":memory:" && existsSync(path);
   if (path !== ":memory:") mkdirSync(dirname(path), { recursive: true });
   const db = new Database(path, { create: true, strict: true });
-  db.exec(`PRAGMA journal_mode=WAL; PRAGMA foreign_keys=ON; PRAGMA busy_timeout=5000;
-    CREATE TABLE IF NOT EXISTS users(id TEXT PRIMARY KEY, username TEXT UNIQUE NOT NULL, display TEXT NOT NULL,
+  try {
+    const version = (
+      db.query("PRAGMA user_version").get() as { user_version: number }
+    ).user_version;
+    if (version > SCHEMA_VERSION)
+      throw Error("このDBは新しい版で作成されている。アプリを最新版に更新して");
+    if (existing && version < SCHEMA_VERSION)
+      console.log(
+        "更新前のDBバックアップ: " +
+          backupDatabase(path, backupDir, "before-schema-v" + SCHEMA_VERSION),
+      );
+    db.exec(
+      "PRAGMA journal_mode=WAL; PRAGMA foreign_keys=ON; PRAGMA busy_timeout=5000",
+    );
+    db.transaction(() => {
+      db.exec(`CREATE TABLE IF NOT EXISTS users(id TEXT PRIMARY KEY, username TEXT UNIQUE NOT NULL, display TEXT NOT NULL,
       salt TEXT NOT NULL, auth TEXT NOT NULL, vault TEXT NOT NULL, keys TEXT NOT NULL, created INTEGER NOT NULL);
     CREATE TABLE IF NOT EXISTS profiles(user TEXT PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE, data TEXT NOT NULL);
     CREATE TABLE IF NOT EXISTS guild_profiles(guild TEXT PRIMARY KEY REFERENCES guilds(id) ON DELETE CASCADE, data TEXT NOT NULL);
@@ -31,5 +48,11 @@ export function database(path: string) {
       envelope TEXT NOT NULL, created INTEGER NOT NULL);
     CREATE INDEX IF NOT EXISTS events_room ON events(room,seq);
     CREATE INDEX IF NOT EXISTS sessions_expiry ON sessions(expires);`);
-  return db;
+      db.exec(`PRAGMA user_version=${SCHEMA_VERSION}`);
+    })();
+    return db;
+  } catch (error) {
+    db.close();
+    throw error;
+  }
 }
