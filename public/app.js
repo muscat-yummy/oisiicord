@@ -7,6 +7,8 @@ import {
   sound,
 } from "./preferences.js";
 import { createSettings } from "./settings.js";
+import { createCommunityUI } from "./community-ui.js";
+import * as M from "./membership.js";
 const $ = (s) => document.querySelector(s);
 const node = (tag, attrs = {}, ...children) => {
   const n = document.createElement(tag);
@@ -38,7 +40,6 @@ let me,
   sending = false,
   reply = null,
   attachments = [],
-  pinsOnly = false,
   activeVoice = null,
   localStream = null,
   videoTrack = null,
@@ -108,7 +109,11 @@ async function api(path, body, method) {
   }
   const res = await fetch("/api" + path, opts);
   const out = await res.json();
-  if (!res.ok) throw Error(out.error ?? "リクエスト失敗");
+  if (!res.ok) {
+    const error = Error(out.error ?? "リクエスト失敗");
+    error.status = res.status;
+    throw error;
+  }
   return out;
 }
 const currentGuild = () => state?.guilds.find((g) => g.id === guildId);
@@ -154,6 +159,28 @@ async function validateRoster(roster, signature, ownerKeys) {
     throw Error("所有者の公開鍵が不正");
   return roster;
 }
+const historyCredentials = new Map(),
+  credentialGenerations = new Map();
+function invalidateCredentials(gid) {
+  credentialGenerations.set(gid, (credentialGenerations.get(gid) ?? 0) + 1);
+  historyCredentials.delete(gid);
+}
+async function loadHistoryCredentials(gid) {
+  if (historyCredentials.has(gid)) return historyCredentials.get(gid);
+  const generation = credentialGenerations.get(gid) ?? 0;
+  const envelopes = await api("/guilds/" + gid + "/history-credentials"),
+    credentials = [];
+  for (const envelope of envelopes) {
+    const credential = await M.readCredential(envelope, me);
+    if (credential.grant.guild !== gid)
+      throw Error("履歴のサーバーが一致しない");
+    credentials.push(credential);
+  }
+  if (generation !== (credentialGenerations.get(gid) ?? 0))
+    return loadHistoryCredentials(gid);
+  historyCredentials.set(gid, credentials);
+  return credentials;
+}
 let refreshing = null,
   refreshRequested = false;
 function refresh() {
@@ -186,7 +213,21 @@ async function refreshState() {
       if (g.owner !== g.roster.owner) throw Error("所有者の証明が不正");
       await pinGuildOwner(g.id, g.owner, owner.keys);
       await pinUser(owner);
-      await validateRoster(g.roster, g.signature, owner.keys);
+      const base = g.certificate?.baseRoster ?? g.roster;
+      await validateRoster(
+        base,
+        g.certificate?.signature ?? g.signature,
+        owner.keys,
+      );
+      const minimumBase = (storage.baseVersions ?? {})[g.id] ?? 0;
+      if (base.version < minimumBase)
+        throw Error("メンバー一覧の巻き戻しを検知");
+      if (g.certificate)
+        g.roster = await M.validateCertificate(
+          g.certificate,
+          owner.keys,
+          minimumBase,
+        );
       if (!g.roster.members.some((m) => m.id === me.id))
         throw Error("署名済みメンバー一覧に自分がいない");
       if (g.version !== g.roster.version || g.id !== g.roster.guild)
@@ -197,6 +238,8 @@ async function refreshState() {
         await pinUser({ ...users.get(member.id), ...member });
       }
       storage.versions[g.id] = g.version;
+      (storage.baseVersions ??= {})[g.id] = base.version;
+      await loadHistoryCredentials(g.id);
       accepted.push(g);
     } catch (e) {
       toast("サーバーを無効化: " + e.message);
@@ -325,33 +368,69 @@ function renderNav() {
   const channels = $("#channel-list");
   channels.replaceChildren();
   if (g) {
-    const owner = g.owner === me.id;
-    for (const [kind, label] of [
-      ["text", "テキストチャンネル"],
-      ["voice", "ボイスチャンネル"],
+    const owner = g.owner === me.id,
+      manager = hasPermission("manageChannels", g);
+    for (const group of [
+      { id: null, name: "チャンネル" },
+      ...(g.categories ?? []),
     ]) {
-      const heading = node("div", { class: "section-label" }, label);
-      if (owner)
+      const key = g.id + ":" + (group.id ?? "none"),
+        collapsed = !!preferences().collapsedCategories?.[key],
+        heading = node("div", { class: "section-label category-heading" });
+      const toggle = button(
+        "",
+        () => {
+          updatePreferences({
+            collapsedCategories: {
+              ...preferences().collapsedCategories,
+              [key]: !collapsed,
+            },
+          });
+          renderNav();
+        },
+        "category-toggle",
+      );
+      toggle.append(icon("chevron", 14), node("span", {}, group.name));
+      toggle.setAttribute("aria-expanded", String(!collapsed));
+      toggle.classList.toggle("collapsed", collapsed);
+      heading.append(toggle);
+      if (manager)
         heading.append(
-          iconButton("plus", "チャンネルを作成", () => newChannel(kind)),
+          iconButton("plus", group.name + "にチャンネルを作成", () =>
+            newChannel("text", undefined, group.id),
+          ),
         );
       channels.append(heading);
-      for (const r of g.channels.filter((r) => r.kind === kind)) {
-        const b = button(
-          "",
-          () => (kind === "voice" ? joinVoice(r.id) : selectRoom(r.id)),
-          "channel" +
-            (roomId === r.id ? " active" : "") +
-            (unread.has(r.id) ? " unread" : ""),
-        );
+      if (collapsed) continue;
+      for (const r of g.channels.filter(
+        (r) => (r.category ?? null) === group.id,
+      )) {
+        const kind = r.kind,
+          b = button(
+            "",
+            () => (kind === "voice" ? joinVoice(r.id) : selectRoom(r.id)),
+            "channel" +
+              (roomId === r.id ? " active" : "") +
+              (unread.has(r.id) ? " unread" : ""),
+          );
         b.append(
           node(
             "span",
             { class: "symbol" },
-            icon(kind === "voice" ? "volume" : "hash", 20),
+            icon(
+              kind === "voice"
+                ? "volume"
+                : kind === "announcement"
+                  ? "megaphone"
+                  : kind === "rules"
+                    ? "book"
+                    : "hash",
+              20,
+            ),
           ),
           node("span", { class: "channel-name" }, r.name),
         );
+        b.setAttribute("aria-label", r.name);
         if (activeVoice === r.id)
           b.append(node("span", { class: "badge" }, "接続中"));
         channels.append(b);
@@ -415,11 +494,19 @@ function renderNav() {
   $("#room-topic").title = r?.topic ?? "";
   $("#room-symbol").replaceChildren(
     icon(
-      r?.kind === "dm" ? "users" : r?.kind === "voice" ? "volume" : "hash",
+      r?.kind === "dm"
+        ? "users"
+        : r?.kind === "voice"
+          ? "volume"
+          : r?.kind === "announcement"
+            ? "megaphone"
+            : r?.kind === "rules"
+              ? "book"
+              : "hash",
       24,
     ),
   );
-  $("#call").hidden = !r || r.kind === "text";
+  $("#call").hidden = !r || !["dm", "voice"].includes(r.kind);
   $("#composer-area").hidden = !r || r.kind === "voice";
   $("#message-input").placeholder = r
     ? (r.kind === "dm" ? "@" : "#") +
@@ -429,7 +516,7 @@ function renderNav() {
   $(".main").classList.toggle("voice-view", r?.kind === "voice");
   $("#call-stage").hidden = !(activeVoice && r?.id === activeVoice);
   $("#stage-controls").hidden = !(activeVoice && r?.id === activeVoice);
-  $("#pins").classList.toggle("active", pinsOnly);
+  renderChannelAccess();
 }
 const drafts = new Map();
 function stashDraft() {
@@ -451,9 +538,9 @@ function restoreDraft() {
 function defaultRoom(g) {
   return (
     g?.channels.find(
-      (r) => r.id === g.profile?.defaultChannel && r.kind === "text",
+      (r) => r.id === g.profile?.defaultChannel && r.kind !== "voice",
     )?.id ??
-    g?.channels.find((r) => r.kind === "text")?.id ??
+    g?.channels.find((r) => r.kind !== "voice")?.id ??
     null
   );
 }
@@ -463,7 +550,6 @@ async function selectGuild(id) {
   guildId = id;
   roomId = defaultRoom(currentGuild());
   reply = null;
-  pinsOnly = false;
   $("#search").value = "";
   restoreDraft();
   renderNav();
@@ -476,7 +562,6 @@ async function selectRoom(id) {
   stashDraft();
   roomId = id;
   reply = null;
-  pinsOnly = false;
   $("#reply-bar").hidden = true;
   $("#search").value = "";
   unread.delete(id);
@@ -549,12 +634,20 @@ async function loadHistory(id) {
               owner = users.get(g.owner);
             if (
               !cert ||
-              cert.roster.guild !== room.guild ||
-              cert.roster.version !== event.envelope.header.version
+              (cert.baseRoster ?? cert.roster).guild !== room.guild ||
+              (cert.version ?? cert.roster.version) !==
+                event.envelope.header.version
             )
               throw Error("過去のメンバー証明が不正");
-            await validateRoster(cert.roster, cert.signature, owner.keys);
-            const certified = cert.roster.members.find(
+            await validateRoster(
+              cert.baseRoster ?? cert.roster,
+              cert.signature,
+              owner.keys,
+            );
+            const signedRoster = cert.baseRoster
+              ? await M.validateCertificate(cert, owner.keys)
+              : cert.roster;
+            const certified = signedRoster.members.find(
               (m) => m.id === event.author,
             );
             if (!certified)
@@ -570,7 +663,13 @@ async function loadHistory(id) {
             event.envelope.header.author !== event.author
           )
             throw Error("メッセージIDが一致しない");
-          const payload = await C.open(event.envelope, me, author.keys, id);
+          const payload = await M.openEvent(
+            event.envelope,
+            me,
+            author.keys,
+            id,
+            historyCredentials.get(room.guild) ?? [],
+          );
           cache.events.push({ ...event, payload, authorUser: author });
         } catch (e) {
           if (e.message !== "この端末宛ての暗号鍵がない")
@@ -638,7 +737,7 @@ function projection() {
       if (
         p.type === "reaction" &&
         typeof p.emoji === "string" &&
-        p.emoji.length <= 16
+        p.emoji.length <= 100
       ) {
         const set = target.reactions[p.emoji] ?? new Set();
         p.add ? set.add(e.author) : set.delete(e.author);
@@ -650,25 +749,79 @@ function projection() {
   return [...messages.values()];
 }
 function richText(s) {
-  const n = node("div", { class: "message-text" });
-  const parts = String(s).split(/(https?:\/\/[^\s<>]+)/g);
-  for (const p of parts) {
-    if (/^https?:\/\//.test(p)) {
-      try {
-        const u = new URL(p);
-        n.append(
-          node(
-            "a",
-            { href: u.href, target: "_blank", rel: "noopener noreferrer" },
-            p,
-          ),
-        );
-      } catch {
-        n.append(document.createTextNode(p));
-      }
-    } else n.append(document.createTextNode(p));
+  return communityUI.richText(s);
+}
+function hasPermission(permission, g = currentGuild()) {
+  return !g || g.owner === me.id || !!g.myPermissions?.[permission];
+}
+function roleList(uid, g = currentGuild()) {
+  return (g?.roles ?? [])
+    .filter(
+      (r) => !r.isDefault && (g.roleAssignments?.[uid] ?? []).includes(r.id),
+    )
+    .sort((a, b) => b.position - a.position);
+}
+function roleChips(uid) {
+  return node(
+    "div",
+    { class: "member-role-chips" },
+    ...roleList(uid).map((r) => {
+      const chip = node("span", { class: "member-role-chip" }, r.name);
+      chip.style.setProperty("--role-color", r.color);
+      return chip;
+    }),
+  );
+}
+function renderChannelAccess() {
+  const g = currentGuild(),
+    r = currentRoom(),
+    notice = $("#notice");
+  notice.replaceChildren();
+  notice.hidden = true;
+  const restricted =
+      !!g &&
+      !!r &&
+      ["announcement", "rules"].includes(r.kind) &&
+      !hasPermission("manageMessages", g),
+    needsRules = !!g && !!g.rules?.requireAcceptance && !g.rulesAccepted;
+  const denied = restricted || needsRules || !hasPermission("sendMessages", g);
+  $("#message-input").disabled = denied;
+  for (const id of ["send", "attach", "emoji"]) $("#" + id).disabled = denied;
+  if (needsRules) {
+    notice.hidden = false;
+    notice.append(icon("book", 20), node("span", {}, "サーバールール"));
+    if (g.rules.channel && r?.id !== g.rules.channel)
+      notice.append(button("ルールを見る", () => selectRoom(g.rules.channel)));
+    if (r?.id === g.rules.channel)
+      notice.append(
+        button(
+          "ルールに同意",
+          async () => {
+            await api("/guilds/" + g.id + "/rules/accept", {
+              version: g.rules.version,
+            });
+            await refresh();
+          },
+          "primary",
+        ),
+      );
+  } else if (restricted) {
+    notice.hidden = false;
+    notice.append(
+      icon(r.kind === "rules" ? "book" : "megaphone", 20),
+      node("span", {}, r.kind === "rules" ? "サーバールール" : "お知らせ"),
+    );
   }
-  return n;
+  if (r?.slowmode && !hasPermission("manageMessages", g)) {
+    notice.hidden = false;
+    notice.append(
+      node(
+        "span",
+        { class: "slowmode-label" },
+        r.slowmode + "秒のスローモード",
+      ),
+    );
+  }
 }
 function renderMessages() {
   const area = $("#messages");
@@ -704,9 +857,7 @@ function renderMessages() {
   }
   const query = $("#search").value.toLowerCase();
   const list = projection().filter(
-    (m) =>
-      (!pinsOnly || m.pinned) &&
-      (!query || m.text.toLowerCase().includes(query)),
+    (m) => !query || m.text.toLowerCase().includes(query),
   );
   if (!list.length) {
     area.append(
@@ -721,16 +872,13 @@ function renderMessages() {
         node(
           "h2",
           {},
-          pinsOnly
-            ? "ピン留めはない"
-            : query
-              ? "一致するメッセージはない"
-              : $("#room-name").textContent,
+          query ? "一致するメッセージはない" : $("#room-name").textContent,
         ),
       ),
     );
   }
-  let day = "";
+  let day = "",
+    previousMessage = null;
   for (const m of list) {
     const date = new Date(m.envelope.header.at),
       nextDay = date.toLocaleDateString("ja-JP", {
@@ -749,9 +897,26 @@ function renderMessages() {
         tabindex: "0",
         "data-message": m.id,
       });
-    row.append(avatar(u), content);
+    const face = button("", () => memberDialog(u), "message-avatar");
+    face.setAttribute(
+      "aria-label",
+      (u?.display ?? "ユーザー") + "のプロフィール",
+    );
+    face.append(avatar(u));
+    row.append(face, content);
+    row.classList.toggle(
+      "is-grouped",
+      preferences().groupMessages !== false &&
+        previousMessage?.author === m.author &&
+        date - previousMessage.date < 300000 &&
+        !m.reply &&
+        !m.pinned,
+    );
+    previousMessage = { author: m.author, date };
     if (m.pinned)
-      content.append(node("div", { class: "pinned-label" }, "ピン留め済み"));
+      content.append(
+        node("div", { class: "pinned-label" }, icon("pin", 13), "ピン留め"),
+      );
     if (m.reply) {
       const original = projection().find((x) => x.id === m.reply);
       content.append(
@@ -766,7 +931,16 @@ function renderMessages() {
       node(
         "div",
         { class: "message-meta" },
-        node("strong", {}, u?.display ?? "ユーザー"),
+        (() => {
+          const author = button(
+            u?.display ?? "ユーザー",
+            () => memberDialog(u),
+            "author-button",
+          );
+          const role = roleList(u?.id)[0];
+          if (role) author.style.color = role.color;
+          return author;
+        })(),
         node(
           "time",
           { datetime: date.toISOString() },
@@ -788,7 +962,7 @@ function renderMessages() {
         const file = node(
           "div",
           { class: "file-card" },
-          node("span", {}, "▤"),
+          icon("download", 26),
           node(
             "div",
             {},
@@ -799,42 +973,50 @@ function renderMessages() {
         );
         content.append(file);
       }
-      const actions = node(
-        "div",
-        { class: "message-actions" },
-        button("返信", () => setReply(m)),
-        button("反応", () => reactionDialog(m)),
-        button(m.pinned ? "ピン解除" : "ピン", () =>
-          sendPayload({ type: "pin", target: m.id, on: !m.pinned }),
-        ),
+      const actions = node("div", { class: "message-actions" });
+      actions.append(
+        iconButton("reply", "返信", () => setReply(m)),
+        iconButton("smile", "リアクション", () => reactionDialog(m)),
       );
+      if (hasPermission("manageMessages"))
+        actions.append(
+          iconButton("pin", m.pinned ? "ピン留めを解除" : "ピン留め", () =>
+            sendPayload({ type: "pin", target: m.id, on: !m.pinned }),
+          ),
+        );
       if (m.author === me.id)
         actions.append(
-          button("編集", () => editMessage(m)),
-          button("削除", () => deleteMessage(m), "danger"),
+          iconButton("edit", "メッセージを編集", () => editMessage(m)),
+          iconButton("trash", "メッセージを削除", () => deleteMessage(m)),
         );
       row.append(actions);
       const reactions = node("div", { class: "reactions" });
       for (const [emoji, set] of Object.entries(m.reactions))
-        if (set.size)
-          reactions.append(
-            button(
-              emoji + " " + set.size,
-              () =>
-                sendPayload({
-                  type: "reaction",
-                  target: m.id,
-                  emoji,
-                  add: !set.has(me.id),
-                }),
-              "reaction" + (set.has(me.id) ? " mine" : ""),
-            ),
+        if (set.size) {
+          const reaction = button(
+            "",
+            () =>
+              sendPayload({
+                type: "reaction",
+                target: m.id,
+                emoji,
+                add: !set.has(me.id),
+              }),
+            "reaction" + (set.has(me.id) ? " mine" : ""),
           );
+          reaction.setAttribute("aria-label", emoji + " " + set.size);
+          reaction.append(
+            communityUI.emojiNode(emoji),
+            node("span", {}, String(set.size)),
+          );
+          reactions.append(reaction);
+        }
       content.append(reactions);
     }
     area.append(row);
   }
   area.scrollTop = nearBottom ? area.scrollHeight : old;
+  communityUI.refreshPins();
 }
 const formatSize = (n) =>
   n >= 1024 * 1024
@@ -843,18 +1025,42 @@ const formatSize = (n) =>
 async function sendPayload(payload) {
   const room = currentRoom();
   if (!room) throw Error("チャンネルを選んで");
-  const rec = recipients(room);
-  for (const u of rec) await pinUser(u);
-  const envelope = await C.seal(payload, {
-    room: room.id,
-    author: me.id,
-    recipients: rec,
-    identity: me,
-    version: currentGuild()?.version ?? 0,
-  });
-  await api("/rooms/" + room.id + "/events", envelope);
+  for (let attempt = 0; attempt < 2; attempt++) {
+    const g = state.guilds.find((g) => g.id === room.guild),
+      rec = recipients(room);
+    for (const u of rec) await pinUser(u);
+    const envelope = await C.seal(payload, {
+      room: room.id,
+      author: me.id,
+      recipients: rec,
+      identity: me,
+      version: g?.version ?? 0,
+      historyWrap: g
+        ? (key, eph, context) =>
+            M.wrapHistoryKeys(
+              key,
+              eph,
+              context,
+              g.activeInvites,
+              users.get(g.owner).keys,
+              {
+                guild: g.id,
+                baseVersion: (g.certificate?.baseRoster ?? g.roster).version,
+              },
+            )
+        : null,
+    });
+    try {
+      await api("/rooms/" + room.id + "/events", envelope);
+      break;
+    } catch (error) {
+      if (error.status !== 409 || attempt === 1) throw error;
+      await refresh();
+    }
+  }
   await loadHistory(room.id).catch(() => toast("送信済み。履歴の更新を待って"));
 }
+
 function setReply(m) {
   reply = m.id;
   $("#reply-bar").hidden = false;
@@ -936,6 +1142,7 @@ async function sendMessage(e) {
     $("#send").disabled = false;
     $("#attach").disabled = false;
     input.disabled = false;
+    renderChannelAccess();
     input.focus();
   }
 }
@@ -954,7 +1161,7 @@ async function downloadFile(f) {
   });
   a.click();
   setTimeout(() => URL.revokeObjectURL(url), 1000);
-  toast("復号・改変検証完了");
+  $("#toast").hidden = true;
 }
 function modal(title, body, submit, label = "保存") {
   const dialog = $("#modal");
@@ -987,8 +1194,8 @@ function prompt(title, label, value, submit, buttonLabel = "保存") {
   modal(title, f.node, () => submit(f.input.value), buttonLabel);
 }
 async function createGuild() {
-  if (state.guilds.some((g) => g.owner === me.id))
-    throw Error("作成できるサーバーは1人1個");
+  if (state.guilds.length >= 30)
+    throw Error("参加できるサーバーは30個までです");
   prompt(
     "サーバーを作成",
     "サーバー名",
@@ -1055,7 +1262,11 @@ function confirmAction(title, fn) {
 async function inviteDialog(onCreated) {
   const g = currentGuild(),
     expiry = node("select", { "aria-label": "有効期限" }),
-    uses = node("select", { "aria-label": "利用回数" });
+    uses = node("select", { "aria-label": "利用回数" }),
+    approval = node("input", {
+      type: "checkbox",
+      "aria-label": "参加に承認が必要",
+    });
   for (const [value, label] of [
     [3600, "1時間"],
     [86400, "24時間"],
@@ -1072,21 +1283,49 @@ async function inviteDialog(onCreated) {
       async () => {
         generate.disabled = true;
         try {
-          const { token } = await api("/guilds/" + g.id + "/invites", {
-            expiresIn: Number(expiry.value),
-            maxUses: Number(uses.value),
-          });
-          const data = { guild: g.id, owner: g.owner, keys: me.keys, token },
-            url =
-              location.origin +
-              "/#invite=" +
-              encodeURIComponent(C.b64(C.bytes(JSON.stringify(data))));
-          result.replaceChildren(
-            node(
-              "textarea",
-              { rows: 4, readonly: true, "aria-label": "招待リンク" },
-              url,
+          const events = [];
+          for (const room of g.channels.filter((r) => r.kind !== "voice")) {
+            for (let page = 0; page < 100; page++) {
+              const before = histories.get(room.id)?.cursor ?? 0;
+              await loadHistory(room.id);
+              const cache = histories.get(room.id);
+              if (cache.error) throw Error(cache.error);
+              if (cache.cursor === before) break;
+            }
+            events.push(
+              ...(histories.get(room.id)?.events ?? []).filter(
+                (e) => !e.invalid,
+              ),
+            );
+          }
+          const history = await M.buildHistory(
+              events,
+              me,
+              historyCredentials.get(g.id) ?? [],
             ),
+            seconds = Number(expiry.value),
+            created = await M.createGrant(
+              {
+                guild: g.id,
+                owner: g.owner,
+                baseVersion: (g.certificate?.baseRoster ?? g.roster).version,
+                expires: seconds ? Date.now() + seconds * 1000 : null,
+                maxUses: Number(uses.value),
+                approval: approval.checked,
+                history,
+              },
+              me,
+            ),
+            { secret, ...published } = created;
+          await api("/guilds/" + g.id + "/invitations", published);
+          const url =
+            location.origin + "/#join=" + created.grant.id + "." + secret;
+          result.replaceChildren(
+            node("input", {
+              readonly: true,
+              value: url,
+              "aria-label": "招待リンク",
+            }),
             button(
               "コピー",
               async () => {
@@ -1098,6 +1337,7 @@ async function inviteDialog(onCreated) {
           );
           result.hidden = false;
           generate.textContent = "新しいリンクを作成";
+          await refresh();
           if (typeof onCreated === "function") await onCreated();
         } finally {
           generate.disabled = false;
@@ -1112,35 +1352,80 @@ async function inviteDialog(onCreated) {
       node("label", {}, "有効期限", expiry),
       node("label", {}, "利用回数", uses),
     ),
+    node("label", { class: "invite-approval" }, approval, "参加に承認が必要"),
     generate,
     result,
   ]);
 }
 async function acceptInvite(data) {
+  if (data?.short) {
+    const invite = await api("/invitations/" + data.id),
+      owner = invite.guild;
+    if (
+      invite.grant.guild !== owner.id ||
+      invite.grant.owner !== owner.owner ||
+      !(await M.verifyGrant(invite.grant, invite.signature, owner.keys))
+    )
+      throw Error("招待の署名が不正");
+    await pinGuildOwner(owner.id, owner.owner, owner.keys);
+    await pinUser({ id: owner.owner, display: owner.name, keys: owner.keys });
+    modal(
+      "サーバーに参加",
+      node(
+        "div",
+        { class: "join-preview" },
+        icon("users", 36),
+        node("h3", {}, owner.name),
+      ),
+      async () => {
+        const proof = await M.admit(invite, data.secret, me),
+          credential = await M.createCredential(invite, data.secret, me),
+          joined = await api("/invitations/" + data.id + "/join", proof);
+        await api("/guilds/" + owner.id + "/history-credentials", {
+          invite: data.id,
+          envelope: credential,
+        });
+        invalidateCredentials(owner.id);
+        for (const r of state.guilds.find((g) => g.id === owner.id)?.channels ??
+          [])
+          histories.delete(r.id);
+        pendingInvite = null;
+        history.replaceState(null, "", location.pathname + location.search);
+        await refresh();
+        if (!joined.approval) await selectGuild(owner.id);
+        else toast("参加申請を送信した");
+      },
+      invite.grant.approval ? "参加申請" : "参加",
+    );
+    return;
+  }
   if (!data?.guild || !data.owner || !data.keys || !data.token)
     throw Error("招待の形式が不正");
   await pinGuildOwner(data.guild, data.owner, data.keys);
-  const fp = await C.fingerprint(data.keys);
-  await pinUser(
-    { id: data.owner, keys: data.keys, display: "招待の所有者" },
-    fp,
-  );
   modal(
     "サーバーに参加",
-    [
-      node(
-        "p",
-        {},
-        "所有者の指紋を相手と別の経路で照合して。参加後は所有者の承認を待つ。",
-      ),
-      node("div", { class: "fingerprint" }, fp),
-    ],
+    node("div", { class: "join-preview" }, icon("users", 36)),
     async () => {
       await api("/guilds/" + data.guild + "/join", { token: data.token });
       pendingInvite = null;
-      toast("参加申請を送信した。所有者の承認を待って。");
+      toast("参加申請を送信した");
     },
     "参加申請",
+  );
+}
+function parseInvite(url) {
+  if (url.origin !== location.origin)
+    throw Error("このアプリの招待リンクを指定して");
+  if (url.hash.startsWith("#join=")) {
+    const match = url.hash
+      .slice(6)
+      .match(/^([A-Za-z0-9_-]{16})\.([A-Za-z0-9_-]{43})$/);
+    if (!match) throw Error("招待リンクの形式が不正");
+    return { short: true, id: match[1], secret: match[2] };
+  }
+  if (!url.hash.startsWith("#invite=")) throw Error("招待リンクの形式が不正");
+  return JSON.parse(
+    new TextDecoder().decode(C.unb64(decodeURIComponent(url.hash.slice(8)))),
   );
 }
 async function approveDialog(u) {
@@ -1189,20 +1474,58 @@ async function updateRoster(members) {
   );
   await refresh();
 }
-function newChannel(kind, onCreated) {
-  prompt(
+function newChannel(kind, onCreated, category = null) {
+  const g = currentGuild(),
+    name = node("input", {
+      required: true,
+      maxlength: 60,
+      "aria-label": "チャンネル名",
+    }),
+    group = node(
+      "select",
+      { "aria-label": "カテゴリ" },
+      node("option", { value: "" }, "カテゴリなし"),
+      ...(g.categories ?? []).map((c) =>
+        node("option", { value: c.id }, c.name),
+      ),
+    ),
+    type = node(
+      "select",
+      { "aria-label": "種類" },
+      ...[
+        ["text", "テキスト"],
+        ["voice", "ボイス"],
+        ["announcement", "お知らせ"],
+        ["rules", "ルール"],
+      ].map(([value, label]) => node("option", { value }, label)),
+    );
+  group.value = category ?? "";
+  type.value = kind;
+  modal(
     "チャンネルを作成",
-    "チャンネル名",
-    "",
-    async (name) => {
-      const g = currentGuild();
-      await api("/guilds/" + g.id + "/channels", { name, kind });
+    [
+      node("label", {}, "チャンネル名", name),
+      node("label", {}, "種類", type),
+      node("label", {}, "カテゴリ", group),
+    ],
+    async () => {
+      const created = await api("/guilds/" + g.id + "/channels", {
+        name: name.value,
+        kind: type.value,
+      });
+      if (group.value)
+        await api(
+          "/guilds/" + g.id + "/channelmeta/" + created.id,
+          { category: group.value },
+          "PATCH",
+        );
       await refresh();
       if (typeof onCreated === "function") await onCreated();
     },
     "作成",
   );
 }
+
 function newDM() {
   prompt(
     "DM を開始",
@@ -1291,25 +1614,22 @@ async function memberDialog(u) {
         "danger",
       ),
     );
-  card.append(actions);
+  card.append(roleChips(u.id), actions);
   modal(u.display, card);
 }
 function reactionDialog(m) {
-  const body = node("div", { class: "buttons" });
-  for (const emoji of ["👍", "❤️", "😂", "🎉", "👀", "✅", "❌", "🤔"])
-    body.append(
-      button(emoji, async () => {
-        await sendPayload({
-          type: "reaction",
-          target: m.id,
-          emoji,
-          add: !m.reactions[emoji]?.has(me.id),
-        });
-        $("#modal").close();
+  communityUI.emojiPicker({
+    mode: "reaction",
+    onSelect: (emoji) =>
+      sendPayload({
+        type: "reaction",
+        target: m.id,
+        emoji,
+        add: !m.reactions[emoji]?.has(me.id),
       }),
-    );
-  modal("リアクション", body);
+  });
 }
+
 function editMessage(m) {
   const input = node(
     "textarea",
@@ -1455,7 +1775,7 @@ function connect() {
           )
             new Notification("Oisiicord", {
               body: "新しいメッセージ",
-              icon: "/icon.svg",
+              icon: "/app-icon",
             });
         } else await loadHistory(m.room);
       }
@@ -1858,6 +2178,9 @@ const settingsUI = createSettings({
   prompt,
   avatar,
   uploadImage: uploadProfileImage,
+  profileImage,
+  selectRoom,
+  memberDialog,
   backup,
   logout,
   refresh,
@@ -1871,6 +2194,36 @@ const settingsUI = createSettings({
   getGuild: currentGuild,
   getRoom: currentRoom,
   getUser: (id) => users.get(id),
+});
+const communityUI = createCommunityUI({
+  node,
+  button,
+  modal,
+  toast,
+  guard,
+  getGuild: currentGuild,
+  getState: () => state,
+  getMe: () => me,
+  getRoom: currentRoom,
+  profileImage,
+  avatar,
+  getUser: (id) => users.get(id),
+  getMessages: projection,
+  unpin: (m) => sendPayload({ type: "pin", target: m.id, on: false }),
+  jumpToMessage: async (id) => {
+    await loadHistory(roomId);
+    const el = document.querySelector(
+      '[data-message="' + CSS.escape(id) + '"]',
+    );
+    el?.scrollIntoView({
+      behavior: preferences().reducedMotion ? "instant" : "smooth",
+      block: "center",
+    });
+    el?.classList.add("message-jump-highlight");
+    setTimeout(() => el?.classList.remove("message-jump-highlight"), 1800);
+  },
+  renderMessages,
+  preferences,
 });
 for (const [id, name, label] of [
   ["add-guild", "plus", "サーバー作成・招待から参加"],
@@ -2046,6 +2399,27 @@ $("#home").onclick = () =>
     renderMembers();
     renderMessages();
   });
+let dmClicks = 0,
+  dmLast = 0,
+  dmAudio = null,
+  branding = { dmSound: false };
+fetch("/api/branding")
+  .then((r) => r.json())
+  .then((value) => (branding = value))
+  .catch(() => {});
+function dmSecret() {
+  if (Date.now() - dmLast > 4000) dmClicks = 0;
+  dmLast = Date.now();
+  if (++dmClicks < 5) return;
+  dmClicks = 0;
+  document.body.classList.toggle("dm-rainbow");
+  if (branding.dmSound) {
+    dmAudio?.pause();
+    dmAudio = new Audio("/settings/dm.mp3");
+    dmAudio.volume = preferences().soundVolume / 100;
+    dmAudio.play().catch(() => {});
+  }
+}
 function guildChoice(label, ic, fn) {
   const el = button("", fn, "guild-choice");
   el.append(
@@ -2068,14 +2442,7 @@ $("#add-guild").onclick = () =>
           "招待リンク",
           "",
           async (value) => {
-            const url = new URL(value);
-            if (url.origin !== location.origin)
-              throw Error("このアプリの招待リンクを指定して");
-            const data = JSON.parse(
-              new TextDecoder().decode(
-                C.unb64(decodeURIComponent(url.hash.slice(8))),
-              ),
-            );
+            const data = parseInvite(new URL(value));
             $("#modal").close();
             setTimeout(() => guard(() => acceptInvite(data)), 0);
           },
@@ -2084,7 +2451,13 @@ $("#add-guild").onclick = () =>
       ),
     ),
   );
-$("#side-title").onclick = () => guard(guildActions);
+$("#side-title").onclick = () => {
+  if (!guildId) dmSecret();
+  else guard(guildActions);
+};
+$("#room-name").onclick = () => {
+  if (!guildId && !roomId) dmSecret();
+};
 $("#side-menu").onclick = () => guard(guildActions);
 $("#profile-settings").onclick = () => guard(settings);
 $("#security").onclick = () => guard(settings);
@@ -2122,25 +2495,22 @@ $("#message-input").oninput = (e) => {
   }
 };
 $("#emoji").onclick = () =>
-  modal(
-    "絵文字",
-    node(
-      "div",
-      { class: "buttons" },
-      ...["👍", "❤️", "😂", "🎉", "👀", "✅", "❌", "🤔"].map((emoji) =>
-        button(emoji, () => {
-          $("#message-input").value += emoji;
-          $("#modal").close();
-          $("#message-input").focus();
-        }),
-      ),
-    ),
-  );
+  communityUI.emojiPicker({
+    anchor: $("#emoji"),
+    onSelect: (emoji) => {
+      const input = $("#message-input");
+      input.setRangeText(
+        emoji,
+        input.selectionStart,
+        input.selectionEnd,
+        "end",
+      );
+      input.focus();
+      input.dispatchEvent(new Event("input", { bubbles: true }));
+    },
+  });
 $("#search").oninput = renderMessages;
-$("#pins").onclick = () => {
-  pinsOnly = !pinsOnly;
-  renderMessages();
-};
+$("#pins").onclick = () => communityUI.pins({ anchor: $("#pins") });
 $("#toggle-members").onclick = () =>
   $("#workspace").classList.toggle("show-members");
 $("#mobile-channels").onclick = () =>
@@ -2159,15 +2529,13 @@ window.addEventListener("beforeunload", () => {
   localStream?.getTracks().forEach((t) => t.stop());
   videoTrack?.stop();
 });
-if (location.hash.startsWith("#invite=")) {
+if (
+  location.hash.startsWith("#invite=") ||
+  location.hash.startsWith("#join=")
+) {
   try {
-    pendingInvite = JSON.parse(
-      new TextDecoder().decode(
-        C.unb64(decodeURIComponent(location.hash.slice(8))),
-      ),
-    );
-    history.replaceState(null, "", location.pathname);
+    pendingInvite = parseInvite(new URL(location.href));
   } catch {
-    toast("招待リンクが不正");
+    toast("招待リンクの形式が不正");
   }
 }

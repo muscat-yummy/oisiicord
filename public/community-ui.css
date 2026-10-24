@@ -1,0 +1,510 @@
+.main {
+  background: var(--main);
+}
+.main .messages {
+  padding: 16px 0 20px;
+  scrollbar-width: thin;
+}
+.main .message {
+  margin-top: var(--message-gap, 16px);
+  padding: 6px 24px;
+  gap: 16px;
+  border-radius: 0;
+}
+.main .message:hover {
+  background: color-mix(in srgb, var(--text) 3%, transparent);
+}
+.main .message-content {
+  min-width: 0;
+}
+.main .message .message-text {
+  line-height: 1.65;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.main .message-meta {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  margin-bottom: 3px;
+}
+.main .message-meta strong,
+.main .author-button {
+  font-size: 14px;
+  font-weight: 650;
+}
+.main .message-meta time {
+  font-size: 11px;
+  color: var(--muted);
+}
+.message-avatar {
+  padding: 0;
+  border: 0;
+  background: none;
+  width: 40px;
+  height: 40px;
+  flex: none;
+  border-radius: 50%;
+}
+.message-avatar > .avatar {
+  width: 40px;
+  height: 40px;
+}
+.message-avatar:hover {
+  background: none;
+}
+.message-avatar:active {
+  transform: scale(0.95);
+}
+.author-button {
+  background: none;
+  padding: 0;
+  text-align: left;
+  color: inherit;
+}
+.author-button:hover {
+  background: none;
+  text-decoration: underline;
+}
+.main .message.is-grouped {
+  margin-top: 0;
+  padding-top: 2px;
+  padding-bottom: 2px;
+}
+.message.is-grouped .message-avatar {
+  visibility: hidden;
+  height: 0;
+}
+.message.is-grouped .message-meta {
+  display: none;
+}
+.main .message-actions {
+  display: flex;
+  border: 1px solid var(--line);
+  background: var(--panel);
+  border-radius: 10px;
+  box-shadow: 0 5px 18px #0003;
+  gap: 1px;
+  padding: 4px;
+  top: -18px;
+  right: 12px;
+}
+.main .message-actions button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 32px;
+  height: 32px;
+  border-radius: 7px;
+  padding: 6px;
+  color: var(--muted);
+}
+.main .message-actions button:hover {
+  background: color-mix(in srgb, var(--text) 8%, transparent);
+  color: var(--text);
+}
+.main .pinned-label {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 12%, transparent);
+  padding: 3px 8px;
+  border-radius: 6px;
+  margin-bottom: 6px;
+  font-size: 11px;
+}
+.main .reactions {
+  display: flex;
+  gap: 5px;
+  margin-top: 7px;
+  flex-wrap: wrap;
+}
+.main .reaction {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  border: 1px solid var(--line);
+  background: color-mix(in srgb, var(--text) 5%, transparent);
+  border-radius: 8px;
+  min-height: 28px;
+  padding: 3px 8px;
+}
+.main .reaction.mine {
+  border-color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 15%, transparent);
+}
+.unicode-emoji {
+  font-family:
+    "Apple Color Emoji", "Segoe UI Emoji", "Noto Color Emoji", sans-serif;
+  line-height: 1.2;
+}
+.custom-emoji {
+  display: inline-flex;
+  align-items: center;
+  vertical-align: middle;
+  min-width: var(--emoji-size, 22px);
+  height: var(--emoji-size, 22px);
+  max-width: 120px;
+  font-size: 11px;
+}
+.custom-emoji img {
+  width: var(--emoji-size, 22px);
+  height: var(--emoji-size, 22px);
+  object-fit: contain;
+}
+.main .composer-area {
+  padding: 0 20px 18px;
+}
+.main #composer {
+  border: 1px solid var(--line);
+  border-radius: 16px;
+  background: color-mix(in srgb, var(--text) 5%, var(--main));
+  padding: 8px 10px;
+  box-shadow: 0 3px 12px #0001;
+}
+.main #composer:focus-within {
+  border-color: color-mix(in srgb, var(--accent) 50%, var(--line));
+}
+.main #message-input {
+  background: transparent;
+}
+.main #composer .icon-button {
+  border-radius: 10px;
+}
+.chat-link-button {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  padding: 9px 13px;
+  margin: 4px 0;
+  background: var(--accent);
+  color: white;
+  border-radius: 8px;
+  border: 1px solid #ffffff18;
+  font-size: 13px;
+  font-weight: 600;
+  vertical-align: middle;
+}
+.chat-link-button:hover {
+  filter: brightness(1.12);
+}
+.chat-external-link {
+  display: inline;
+  padding: 0;
+  border: 0;
+  background: none;
+  border-radius: 0;
+  color: #70b7ff;
+  font: inherit;
+  text-align: left;
+  overflow-wrap: anywhere;
+}
+.chat-external-link:hover {
+  background: none;
+  text-decoration: underline;
+}
+.link-confirmation {
+  padding: 12px 0;
+}
+.link-confirmation strong {
+  display: block;
+  font-size: 19px;
+  overflow-wrap: anywhere;
+}
+#modal .link-confirmation-url {
+  padding: 14px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--panel);
+  font-family: ui-monospace, monospace;
+  font-size: 12px;
+  overflow-wrap: anywhere;
+  color: var(--text);
+}
+.emoji-picker-dialog {
+  width: min(448px, calc(100vw - 24px));
+  padding: 0;
+  background: var(--main);
+  border: 1px solid var(--line);
+  border-radius: 16px;
+  box-shadow: 0 18px 75px #0007;
+  max-height: min(650px, 90dvh);
+  overflow: hidden;
+}
+.emoji-picker-dialog header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 18px 18px 12px;
+  margin: 0;
+}
+.emoji-picker-dialog h2 {
+  font-size: 16px;
+  margin: 0;
+}
+.emoji-picker-close,
+.pins-close {
+  width: 34px;
+  height: 34px;
+  min-width: 34px;
+  display: grid;
+  place-items: center;
+  padding: 6px;
+  border-radius: 9px;
+  background: none;
+}
+.emoji-picker-dialog > input {
+  width: calc(100% - 32px);
+  margin: 0 16px 12px;
+  border: 1px solid var(--line);
+  background: var(--panel);
+  height: 42px;
+  border-radius: 9px;
+  padding: 10px 12px;
+  color: var(--text);
+}
+.emoji-category-tabs {
+  display: flex;
+  gap: 6px;
+  padding: 0 16px 12px;
+  overflow-x: auto;
+  scrollbar-width: thin;
+  border-bottom: 1px solid var(--line);
+}
+.emoji-category-tab {
+  white-space: nowrap;
+  background: none;
+  color: var(--muted);
+  padding: 7px 10px;
+  border-radius: 7px;
+  font-size: 11px;
+}
+.emoji-category-tab[aria-selected="true"] {
+  background: color-mix(in srgb, var(--accent) 17%, transparent);
+  color: var(--text);
+}
+.emoji-picker-list {
+  display: grid;
+  grid-template-columns: repeat(8, minmax(0, 1fr));
+  align-content: start;
+  gap: 3px;
+  padding: 12px 14px 18px;
+  height: 370px;
+  overflow: auto;
+  scrollbar-width: thin;
+}
+.emoji-picker-list h3 {
+  grid-column: 1/-1;
+  font-size: 11px;
+  letter-spacing: 0.04em;
+  color: var(--muted);
+  margin: 14px 4px 8px;
+}
+.emoji-picker-list h3:first-child {
+  margin-top: 3px;
+}
+.emoji-choice {
+  display: grid;
+  place-items: center;
+  min-width: 0;
+  width: 100%;
+  height: 43px;
+  background: none;
+  border-radius: 9px;
+  padding: 5px;
+}
+.emoji-choice:hover {
+  background: color-mix(in srgb, var(--accent) 16%, transparent);
+  transform: scale(1.12);
+}
+.emoji-choice .unicode-emoji {
+  font-size: 27px;
+}
+.emoji-empty {
+  grid-column: 1/-1;
+  text-align: center;
+  padding: 50px 12px;
+  color: var(--muted);
+  font-size: 13px;
+}
+.pins-dialog {
+  width: min(470px, calc(100vw - 24px));
+  max-height: min(720px, 90dvh);
+  padding: 0;
+  background: var(--main);
+  border: 1px solid var(--line);
+  border-radius: 15px;
+  overflow: hidden;
+  box-shadow: 0 20px 80px #0007;
+}
+.pins-dialog > header {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 18px;
+  margin: 0;
+  border-bottom: 1px solid var(--line);
+}
+.pins-dialog h2 {
+  font-size: 16px;
+  margin: 0;
+  flex: 1;
+}
+.pins-count {
+  font-size: 11px;
+  color: var(--muted);
+}
+.pins-list {
+  overflow: auto;
+  max-height: 580px;
+  padding: 14px;
+  display: grid;
+  gap: 12px;
+  scrollbar-width: thin;
+}
+.pin-card {
+  padding: 14px;
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 11px;
+  min-width: 0;
+}
+.pin-card > header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 0 0 12px;
+}
+.pin-card .avatar {
+  width: 28px;
+  height: 28px;
+  font-size: 11px;
+}
+.pin-card strong {
+  font-size: 12px;
+}
+.pin-card time {
+  margin-left: auto;
+  font-size: 10px;
+  color: var(--muted);
+}
+.pin-card .message-text {
+  font-size: 13px;
+  line-height: 1.6;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.pin-card small {
+  display: block;
+  margin-top: 8px;
+  color: var(--muted);
+  font-size: 11px;
+}
+.pin-card-actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+  margin-top: 14px;
+}
+.pin-card-actions button {
+  padding: 7px 10px;
+  font-size: 11px;
+}
+.pins-empty {
+  display: grid;
+  justify-items: center;
+  gap: 10px;
+  padding: 50px 20px;
+  color: var(--muted);
+}
+.message.message-jump-highlight {
+  animation: message-jump 1.8s ease-out;
+}
+@keyframes message-jump {
+  from {
+    background: color-mix(in srgb, var(--accent) 28%, transparent);
+  }
+  to {
+    background: transparent;
+  }
+}
+.compact-messages .main .message {
+  margin-top: 3px;
+  gap: 10px;
+}
+.compact-messages .main .message-avatar,
+.compact-messages .main .message-avatar > .avatar {
+  width: 26px;
+  height: 26px;
+  font-size: 10px;
+}
+.reduce-motion .emoji-choice:hover {
+  transform: none;
+}
+@media (max-width: 650px) {
+  .main .message {
+    padding-left: 12px;
+    padding-right: 12px;
+    gap: 10px;
+  }
+  .main .composer-area {
+    padding: 0 10px 12px;
+  }
+  .main .message-actions {
+    right: 8px;
+    top: -25px;
+  }
+  .main .message-actions button {
+    min-width: 30px;
+    width: 30px;
+    height: 30px;
+  }
+  .emoji-picker-list {
+    grid-template-columns: repeat(7, minmax(0, 1fr));
+    height: min(370px, 50dvh);
+  }
+  .emoji-choice {
+    height: 40px;
+  }
+  .pins-list {
+    max-height: 65dvh;
+  }
+  .pin-card time {
+    font-size: 9px;
+  }
+  .pin-card-actions {
+    flex-wrap: wrap;
+  }
+}
+@media (min-width: 801px) {
+  .pins-dialog {
+    margin: 74px 18px auto auto;
+    max-height: calc(100dvh - 96px);
+  }
+}
+
+.main .message > .message-actions {
+  opacity: 0;
+  pointer-events: none;
+  transform: translateY(3px);
+  transition:
+    opacity 0.12s ease,
+    transform 0.12s ease;
+}
+.main .message:hover > .message-actions,
+.main .message:focus-within > .message-actions {
+  opacity: 1;
+  pointer-events: auto;
+  transform: translateY(0);
+}
+@media (hover: none) {
+  .main .message:hover:not(:focus-within) > .message-actions {
+    opacity: 0;
+    pointer-events: none;
+  }
+}
+.reduce-motion .main .message > .message-actions {
+  transition: none;
+}

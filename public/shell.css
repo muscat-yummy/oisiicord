@@ -1,0 +1,222 @@
+.category-heading {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 20px 8px 8px;
+}
+.category-toggle {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  flex: 1;
+  min-width: 0;
+  padding: 0;
+  background: none;
+  color: inherit;
+  text-align: left;
+  font-size: 12px;
+  font-weight: 700;
+}
+.category-toggle .ui-icon {
+  transition: transform 0.15s;
+}
+.category-toggle.collapsed .ui-icon {
+  transform: rotate(-90deg);
+}
+.category-heading > .icon-button {
+  width: 28px;
+  min-width: 28px;
+  height: 28px;
+}
+.channel .symbol {
+  flex: none;
+}
+.main .message {
+  margin-top: var(--message-gap, 16px);
+}
+.main .message.is-grouped {
+  margin-top: 0;
+  padding-top: 3px;
+  padding-bottom: 3px;
+}
+.message-avatar {
+  flex: none;
+  width: 40px;
+  height: 40px;
+  padding: 0;
+  border: 0;
+  border-radius: 50%;
+  background: none;
+}
+.message-avatar > .avatar {
+  width: 40px;
+  height: 40px;
+}
+.message.is-grouped > .message-avatar {
+  visibility: hidden;
+  height: 20px;
+}
+.message.is-grouped .message-meta {
+  display: none;
+}
+.message.is-grouped:focus-within > .message-avatar,
+.message.is-grouped:hover > .message-avatar {
+  visibility: visible;
+  opacity: 0.65;
+}
+.message.is-grouped:focus-within > .message-avatar > .avatar,
+.message.is-grouped:hover > .message-avatar > .avatar {
+  width: 25px;
+  height: 25px;
+  font-size: 10px;
+  margin: 0 auto;
+}
+.author-button {
+  background: none;
+  padding: 0;
+  font-size: 14px;
+  font-weight: 650;
+  color: var(--text);
+  text-align: left;
+}
+.author-button:hover {
+  text-decoration: underline;
+}
+.message-actions {
+  display: flex;
+  gap: 2px;
+  padding: 5px;
+  top: -15px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--panel);
+  box-shadow: 0 4px 12px #0002;
+}
+.message-actions .icon-button {
+  width: 32px;
+  height: 32px;
+  min-width: 32px;
+  padding: 5px;
+  color: var(--muted);
+}
+.pinned-label {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--muted);
+  font-size: 11px;
+  margin-bottom: 5px;
+}
+.member-role-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 7px;
+  margin: 16px 0;
+}
+.member-role-chip {
+  border: 1px solid color-mix(in srgb, var(--role-color) 50%, transparent);
+  border-radius: 14px;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 5px 9px;
+  font-size: 12px;
+}
+.member-role-chip::before {
+  content: "";
+  width: 7px;
+  height: 7px;
+  background: var(--role-color);
+  border-radius: 50%;
+}
+#notice {
+  display: flex;
+  gap: 12px;
+  align-items: center;
+  padding: 12px 20px;
+  background: color-mix(in srgb, var(--accent) 10%, var(--panel));
+  font-size: 13px;
+  flex-wrap: wrap;
+}
+#notice[hidden] {
+  display: none;
+}
+.slowmode-label {
+  margin-left: auto;
+  color: var(--muted);
+  font-size: 11px;
+}
+#message-input:disabled {
+  opacity: 0.55;
+}
+body.dm-rainbow:not(:has(.rail-item.active:not(#home))) .side-header,
+body.dm-rainbow:not(:has(.rail-item.active:not(#home))) .room-header {
+  background: linear-gradient(
+    100deg,
+    #ec4899,
+    #f97316,
+    #eab308,
+    #22c55e,
+    #06b6d4,
+    #6366f1,
+    #a855f7,
+    #ec4899
+  );
+  background-size: 300% 300%;
+  animation: dm-rainbow 6s linear infinite;
+  color: white;
+}
+@keyframes dm-rainbow {
+  0% {
+    background-position: 0 50%;
+  }
+  100% {
+    background-position: 100% 50%;
+  }
+}
+body.reduce-motion.dm-rainbow .side-header,
+body.reduce-motion.dm-rainbow .room-header {
+  animation: none;
+}
+#side-title {
+  user-select: none;
+}
+.invite-approval {
+  display: flex;
+  gap: 10px;
+  align-items: center;
+  margin: 0 0 24px;
+  font-size: 13px;
+}
+#modal .invite-approval input {
+  width: 18px;
+  height: 18px;
+  margin: 0;
+  accent-color: var(--accent);
+}
+.join-preview {
+  text-align: center;
+  padding: 24px;
+}
+#modal label {
+  display: grid;
+  gap: 8px;
+  margin-bottom: 14px;
+}
+#modal .invite-approval {
+  display: flex;
+}
+@media (max-width: 650px) {
+  .message-actions .icon-button {
+    width: 32px;
+    height: 32px;
+    min-width: 32px;
+  }
+  .message {
+    padding-left: 12px;
+    padding-right: 12px;
+  }
+  #notice {
+    padding: 10px 12px;
+  }
+}

@@ -91,12 +91,20 @@ try {
   await page.getByRole("button", { name: "👍", exact: true }).click();
   await page.getByRole("button", { name: "👍 1", exact: true }).waitFor();
   await page.locator(".message").hover();
-  await page.getByRole("button", { name: "ピン", exact: true }).last().click();
-  await page.getByText("ピン留め済み", { exact: true }).waitFor();
+  await page
+    .getByRole("button", { name: "ピン留め", exact: true })
+    .last()
+    .click();
+  await page.locator(".pinned-label").filter({ hasText: "ピン留め" }).waitFor();
   await page.locator("#side-menu").click();
   await page.getByRole("button", { name: "友達を招待", exact: true }).click();
+  await page
+    .getByRole("checkbox", { name: "参加に承認が必要", exact: true })
+    .check();
   await page.getByRole("button", { name: "リンクを作成", exact: true }).click();
-  const invite = await page.locator("#modal-body textarea").inputValue();
+  const invite = await page
+    .getByLabel("招待リンク", { exact: true })
+    .inputValue();
   await page.locator("#modal-close").click();
   const c2 = await browser.newContext({
     viewport: { width: 1280, height: 900 },

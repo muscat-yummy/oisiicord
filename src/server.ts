@@ -1,5 +1,8 @@
 import { database } from "./db";
-import { prepareStorage } from "./storage";
+import { prepareStorage, projectRoot } from "./storage";
+import { createCommunity } from "./community";
+import { createInvitations } from "./invitations";
+import { createBranding } from "./branding";
 import { canonical, verify, fingerprint } from "../public/crypto.js";
 import { resolve } from "node:path";
 
@@ -233,6 +236,8 @@ export function createApp(
       h.room !== r.id ||
       h.author !== uid ||
       !idPattern.test(h.id) ||
+      (h.type !== undefined &&
+        !["message", "edit", "delete", "reaction", "pin"].includes(h.type)) ||
       !Number.isSafeInteger(h.at) ||
       Math.abs(Date.now() - h.at) > 300000
     )
@@ -248,11 +253,33 @@ export function createApp(
       canonical(members(r).sort())
     )
       fail(409, "宛先が現在のメンバーと一致しない");
+    if (r.guild) {
+      const expected = invitations
+        .state(r.guild)
+        .activeInvites.map((i: any) => i.grant.id)
+        .sort();
+      if (
+        canonical(Object.keys(e.historyBoxes ?? {}).sort()) !==
+        canonical(expected)
+      )
+        fail(409, "招待が変更された。更新して再送信して");
+    }
     const { signature, ...body } = e;
     if (!(await verify(body, signature, user(uid).keys)))
       fail(400, "署名の検証に失敗");
     // Signature verification yields; recheck authorization after it to close membership races.
     roomAccess(r.id, uid);
+    if (r.guild) {
+      const expected = invitations
+        .state(r.guild)
+        .activeInvites.map((i: any) => i.grant.id)
+        .sort();
+      if (
+        canonical(Object.keys(e.historyBoxes ?? {}).sort()) !==
+        canonical(expected)
+      )
+        fail(409, "招待が変更された。更新して再送信して");
+    }
     if (
       r.guild &&
       h.version !==
@@ -266,12 +293,16 @@ export function createApp(
       uid,
     ).map((g) => ({
       ...g,
+      id: g.id,
+      owner: g.owner,
       roster: JSON.parse(g.roster),
       profile: JSON.parse(
         one("SELECT data FROM guild_profiles WHERE guild=?", g.id)?.data ??
           "{}",
       ),
-      channels: channels(g.id),
+      ...community.state(g.id, uid),
+      ...invitations.state(g.id),
+      channels: community.decorateChannels(g.id, channels(g.id)),
       requests:
         g.owner === uid
           ? all("SELECT user FROM requests WHERE guild=?", g.id).map((x) =>
@@ -285,7 +316,9 @@ export function createApp(
     ).map((r) => ({ ...r, id: r.id, users: members(r) }));
     const ids = new Set([
       uid,
-      ...guilds.flatMap((g) => g.roster.members.map((m: any) => m.id)),
+      ...guilds.flatMap((g) =>
+        all("SELECT user FROM members WHERE guild=?", g.id).map((m) => m.user),
+      ),
       ...dms.flatMap((r) => r.users),
     ]);
     return {
@@ -328,6 +361,32 @@ export function createApp(
     status = 200,
     headers: Record<string, string> = {},
   ) => Response.json(value, { status, headers: { ...common, ...headers } });
+  const community = createCommunity({
+    db,
+    one,
+    all,
+    run,
+    json,
+    response,
+    fail,
+    text,
+    changed,
+    audit,
+  });
+  const invitations = createInvitations({
+    db,
+    one,
+    all,
+    run,
+    json,
+    response,
+    fail,
+    changed,
+    audit,
+    user,
+    ensureMembershipLimit: community.ensureMembershipLimit,
+  });
+  const branding = createBranding(projectRoot, common);
   function sessionResponse(uid: string) {
     const token =
       Bun.randomUUIDv7() +
@@ -425,6 +484,10 @@ export function createApp(
     const session = auth(req),
       uid = session.user;
     limit("api:" + uid, 180);
+    const invitationResponse = await invitations.handle(req, url, uid);
+    if (invitationResponse) return invitationResponse;
+    const communityResponse = await community.handle(req, url, uid);
+    if (communityResponse) return communityResponse;
     if (
       p === "/ws" &&
       [...sockets].filter((s) => s.data.user === uid).length >= 4
@@ -618,6 +681,7 @@ export function createApp(
         fail(400, "メンバー署名が不正");
       try {
         db.transaction(() => {
+          community.ensureMembershipLimit(uid);
           run(
             "INSERT INTO guilds VALUES(?,?,?,?,?,?)",
             r.guild,
@@ -648,8 +712,6 @@ export function createApp(
             );
         })();
       } catch (e) {
-        if (one("SELECT id FROM guilds WHERE owner=?", uid))
-          fail(409, "作成できるサーバーは1人1個");
         throw e;
       }
       return response({ id: r.guild });
@@ -675,6 +737,7 @@ export function createApp(
             return;
           if (invite.maxUses && invite.uses >= invite.maxUses)
             fail(403, "招待の利用回数が上限に達した");
+          community.ensureMembershipLimit(uid);
           run("INSERT INTO requests VALUES(?,?)", gid, uid);
           run(
             "INSERT INTO invite_settings VALUES(?,?,1) ON CONFLICT(invite) DO UPDATE SET uses=uses+1",
@@ -686,7 +749,12 @@ export function createApp(
         emitUsers([g.owner], { type: "state" });
         return response({ name: g.name });
       }
-      const g = owner(gid, uid);
+      const channelAction = ["channels", "channelorder"].includes(action);
+      if (channelAction)
+        community.requirePermission(gid, uid, "manageChannels");
+      const g = channelAction
+        ? one("SELECT * FROM guilds WHERE id=?", gid)!
+        : owner(gid, uid);
       if (action === "audit" && method === "GET") {
         const before = Number(
           url.searchParams.get("before") ?? Number.MAX_SAFE_INTEGER,
@@ -826,6 +894,11 @@ export function createApp(
           (x) => x.user,
         );
         db.transaction(() => {
+          for (const member of r.members)
+            if (!previous.includes(member.id))
+              community.ensureMembershipLimit(member.id);
+          for (const id of previous)
+            if (!seen.has(id)) community.removeMember(gid, id);
           run("DELETE FROM members WHERE guild=?", gid);
           for (const member of r.members) {
             run(
@@ -854,6 +927,7 @@ export function createApp(
             JSON.stringify(r),
             b.signature,
           );
+          invitations.rosterChanged(gid);
           for (const id of previous)
             if (!seen.has(id))
               audit(gid, uid, "member.remove", user(id).display);
@@ -891,7 +965,8 @@ export function createApp(
       }
       if (action === "channels" && method === "POST") {
         const b = await json(req);
-        if (!["text", "voice"].includes(b.kind)) fail(400, "種類が不正");
+        if (!["text", "voice", "announcement", "rules"].includes(b.kind))
+          fail(400, "種類が不正");
         if (all("SELECT id FROM rooms WHERE guild=?", gid).length >= 100)
           fail(400, "チャンネル上限");
         const id = uuid(),
@@ -940,7 +1015,7 @@ export function createApp(
           profile.defaultChannel !== null &&
           (typeof profile.defaultChannel !== "string" ||
             !one(
-              "SELECT 1 FROM rooms WHERE id=? AND guild=? AND kind='text'",
+              "SELECT 1 FROM rooms WHERE id=? AND guild=? AND kind IN ('text','announcement','rules')",
               profile.defaultChannel,
               gid,
             ))
@@ -1004,19 +1079,13 @@ export function createApp(
           ).map((e) => {
             const envelope = JSON.parse(e.envelope);
             const cert = r.guild
-              ? one(
-                  "SELECT roster,signature FROM rosters WHERE guild=? AND version=?",
-                  r.guild,
-                  envelope.header.version,
-                )
+              ? invitations.certificate(r.guild, envelope.header.version)
               : null;
             return {
               ...e,
               envelope,
               authorUser: user(e.author),
-              certificate: cert
-                ? { roster: JSON.parse(cert.roster), signature: cert.signature }
-                : null,
+              certificate: cert ? { ...cert, roster: cert.baseRoster } : null,
             };
           }),
         );
@@ -1025,6 +1094,7 @@ export function createApp(
         limit("send:" + uid, 60);
         const e = await json(req);
         await validateEnvelope(e, r, uid);
+        community.assertCanPost(r, uid, e.header.type ?? "message");
         try {
           run(
             "INSERT INTO events(id,room,author,envelope,created) VALUES(?,?,?,?,?)",
@@ -1038,6 +1108,7 @@ export function createApp(
           fail(409, "送信済みのメッセージID");
         }
         const event = one("SELECT seq FROM events WHERE id=?", e.header.id)!;
+        community.rulesChanged(r, e.header.type ?? "message");
         emitUsers(members(r), {
           type: "event",
           room: r.id,
@@ -1048,7 +1119,7 @@ export function createApp(
       }
       if (!m[2] && ["PATCH", "DELETE"].includes(method)) {
         if (!r.guild) fail(403, "DMは変更できない");
-        owner(r.guild, uid);
+        community.requirePermission(r.guild, uid, "manageChannels");
         if (method === "PATCH") {
           const b = await json(req),
             name = b.name === undefined ? r.name : text(b.name, 60),
@@ -1180,6 +1251,8 @@ export function createApp(
     async fetch(req, server) {
       try {
         const url = new URL(req.url);
+        const branded = await branding(req, url);
+        if (branded) return branded;
         if (url.pathname.startsWith("/api/") || url.pathname === "/ws")
           return await api(req, url, server);
         if (req.method !== "GET" && req.method !== "HEAD")
@@ -1191,6 +1264,11 @@ export function createApp(
           "/icons.js": "icons.js",
           "/preferences.js": "preferences.js",
           "/settings.js": "settings.js",
+          "/community-ui.js": "community-ui.js",
+          "/membership.js": "membership.js",
+          "/community-ui.css": "community-ui.css",
+          "/community-settings.css": "community-settings.css",
+          "/shell.css": "shell.css",
           "/style.css": "style.css",
           "/icon.svg": "icon.svg",
           "/manifest.webmanifest": "manifest.webmanifest",
@@ -1259,6 +1337,8 @@ export function createApp(
           }
           const r = roomAccess(m.room, ws.data.user);
           if (m.type === "join-voice") {
+            if (r.guild)
+              community.requirePermission(r.guild, ws.data.user, "connect");
             if (!["voice", "dm"].includes(r.kind))
               fail(400, "音声チャンネルではない");
             for (const other of sockets)

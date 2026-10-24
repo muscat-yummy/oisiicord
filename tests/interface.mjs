@@ -196,7 +196,7 @@ try {
     await settings();
     assert.equal(
       await page.locator(".settings-navigation [data-tab]").count(),
-      8,
+      12,
     );
     await page.locator("[data-tab=channels]").click();
     await page
@@ -250,7 +250,7 @@ try {
     const invite = await modal
       .getByLabel("招待リンク", { exact: true })
       .inputValue();
-    assert(invite.includes("#invite="));
+    assert(invite.includes("#join="));
     await screenshot(page, "server-invite");
     await page.locator("#modal-close").click();
     await area.getByText(/0 \/ 5 回/).waitFor();
@@ -344,9 +344,14 @@ try {
     await page.locator("#side-menu").click();
     await page.getByRole("button", { name: "友達を招待", exact: true }).click();
     await page
+      .getByRole("checkbox", { name: "参加に承認が必要", exact: true })
+      .check();
+    await page
       .getByRole("button", { name: "リンクを作成", exact: true })
       .click();
-    const invite = await page.locator("#modal-body textarea").inputValue();
+    const invite = await page
+      .getByLabel("招待リンク", { exact: true })
+      .inputValue();
     await page.locator("#modal-close").click();
     const c = await context(),
       bob = await c.newPage();
@@ -543,9 +548,14 @@ try {
     await page.locator("#side-menu").click();
     await page.getByRole("button", { name: "友達を招待", exact: true }).click();
     await page
+      .getByRole("checkbox", { name: "参加に承認が必要", exact: true })
+      .check();
+    await page
       .getByRole("button", { name: "リンクを作成", exact: true })
       .click();
-    const invite = await page.locator("#modal-body textarea").inputValue();
+    const invite = await page
+      .getByLabel("招待リンク", { exact: true })
+      .inputValue();
     await page.locator("#modal-close").click();
     const c = await context(),
       bob = await c.newPage();

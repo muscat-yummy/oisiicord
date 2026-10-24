@@ -5,3 +5,5 @@ data/
 test-results/
 playwright-report/
 .oisiicord-update.json
+settings/icon.png
+settings/dm.mp3

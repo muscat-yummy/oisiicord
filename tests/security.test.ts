@@ -202,7 +202,7 @@ describe("browser cryptography", () => {
   });
 });
 describe("authorization and encrypted collaboration", () => {
-  test("one owned guild, signed membership, and channel permissions", async () => {
+  test("multiple owned guilds, signed membership, and channel permissions", async () => {
     guild = crypto.randomUUID();
     roster = {
       guild,
@@ -222,7 +222,7 @@ describe("authorization and encrypted collaboration", () => {
       roster: second,
       signature: await C.sign(second, alice.identity),
     });
-    expect(r.status).toBe(409);
+    expect(r.status).toBe(200);
     const state = await request(alice, "/state");
     room = state.body.guilds[0].channels.find((r: any) => r.kind === "text").id;
     expect((await request(bob, "/rooms/" + room + "/events")).status).toBe(403);

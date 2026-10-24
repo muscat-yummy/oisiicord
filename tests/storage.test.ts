@@ -285,3 +285,31 @@ test("git update backs up data and preserves local host configuration; edited so
   expect(readFileSync(join(root, "revision.txt"), "utf8")).toBe("local work");
   expect(readdirSync(paths.backupDir).length).toBe(1);
 });
+
+test("owner uniqueness migration retains guild children and permits multiple owned servers", () => {
+  const base = directory(),
+    path = join(base, "old-owner.sqlite"),
+    old = new Database(path, { create: true });
+  old.exec(`PRAGMA foreign_keys=ON;
+ CREATE TABLE users(id TEXT PRIMARY KEY,username TEXT UNIQUE NOT NULL,display TEXT NOT NULL,salt TEXT NOT NULL,auth TEXT NOT NULL,vault TEXT NOT NULL,keys TEXT NOT NULL,created INTEGER NOT NULL);
+ CREATE TABLE guilds(id TEXT PRIMARY KEY,owner TEXT UNIQUE NOT NULL REFERENCES users(id),name TEXT NOT NULL,roster TEXT NOT NULL,signature TEXT NOT NULL,version INTEGER NOT NULL);
+ CREATE TABLE members(guild TEXT REFERENCES guilds(id) ON DELETE CASCADE,user TEXT REFERENCES users(id),role TEXT NOT NULL,PRIMARY KEY(guild,user));
+ CREATE TABLE rooms(id TEXT PRIMARY KEY,guild TEXT REFERENCES guilds(id) ON DELETE CASCADE,kind TEXT NOT NULL,name TEXT NOT NULL);
+ CREATE TABLE rosters(guild TEXT REFERENCES guilds(id) ON DELETE CASCADE,version INTEGER NOT NULL,roster TEXT NOT NULL,signature TEXT NOT NULL,PRIMARY KEY(guild,version));
+ INSERT INTO users VALUES('owner','owner','Owner','salt','auth','vault','keys',1);
+ INSERT INTO guilds VALUES('old','owner','Old','roster','signature',1);
+ INSERT INTO members VALUES('old','owner','owner');INSERT INTO rooms VALUES('room','old','text','History');INSERT INTO rosters VALUES('old',1,'roster','signature');PRAGMA user_version=1;`);
+  old.close();
+  const migrated = database(path);
+  expect(scalar(migrated, "SELECT name FROM rooms")).toBe("History");
+  expect(scalar(migrated, "SELECT signature FROM rosters")).toBe("signature");
+  expect(scalar(migrated, "SELECT COUNT(*) FROM members")).toBe(1);
+  migrated.exec(
+    "INSERT INTO guilds VALUES('new','owner','New','roster','signature',1)",
+  );
+  expect(scalar(migrated, "SELECT COUNT(*) FROM guilds")).toBe(2);
+  expect(migrated.query("PRAGMA foreign_key_check").all()).toEqual([]);
+  expect(scalar(migrated, "PRAGMA foreign_keys")).toBe(1);
+  expect(readdirSync(join(base, "backups")).length).toBe(1);
+  migrated.close();
+});

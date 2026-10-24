@@ -1,0 +1,192 @@
+.settings-nav-search {
+  width: 100%;
+  min-width: 0;
+  margin: 12px 0 14px;
+  padding: 10px 12px;
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  background: var(--main);
+  font-size: 12px;
+  color: var(--text);
+}
+.settings-action[hidden] {
+  display: none;
+}
+.community-permission-list {
+  display: grid;
+  gap: 0;
+  margin-top: 18px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  overflow: hidden;
+}
+.community-check {
+  display: flex !important;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 14px 16px;
+  margin: 0 !important;
+  border-bottom: 1px solid var(--line);
+  font-size: 13px;
+}
+.community-check:last-child {
+  border-bottom: 0;
+}
+#modal .community-check input {
+  width: 19px;
+  height: 19px;
+  min-width: 19px;
+  margin: 0;
+  accent-color: var(--accent);
+}
+.community-role-title {
+  display: flex;
+  gap: 13px;
+  align-items: center;
+  min-width: 0;
+}
+.community-role-dot {
+  width: 14px;
+  height: 14px;
+  flex: none;
+  border-radius: 50%;
+  background: var(--role-color);
+}
+.community-role-title > div {
+  min-width: 0;
+}
+.community-role-title small {
+  line-height: 1.6;
+}
+.community-role-tags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px;
+  margin-top: 8px;
+}
+.community-role-tags > span {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 3px 7px;
+  border: 1px solid color-mix(in srgb, var(--role-color) 45%, transparent);
+  border-radius: 12px;
+  font-size: 11px;
+}
+.community-role-tags > span::before {
+  content: "";
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--role-color);
+}
+.community-member-list {
+  margin-top: 14px;
+}
+.community-member-row {
+  flex-wrap: wrap;
+}
+.community-member-row .member-setting-identity {
+  min-width: 210px;
+}
+.community-emoji-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(170px, 1fr));
+  gap: 14px;
+  margin-top: 20px;
+}
+.community-emoji-card {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 14px;
+  padding: 22px 12px;
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  min-width: 0;
+}
+.community-emoji-card > .avatar {
+  width: 64px;
+  height: 64px;
+  border-radius: 8px;
+  font-size: 20px;
+  background: transparent;
+}
+.community-emoji-card > .avatar > img {
+  border-radius: 8px;
+  object-fit: contain;
+}
+.community-emoji-card > strong {
+  font-size: 13px;
+  overflow-wrap: anywhere;
+}
+.community-emoji-card .buttons {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 7px;
+}
+.community-emoji-card button {
+  font-size: 11px;
+  padding: 7px 9px;
+}
+.community-emoji-preview {
+  display: grid;
+  place-items: center;
+  min-height: 110px;
+  margin-top: 16px;
+  border: 1px dashed var(--line);
+  border-radius: 10px;
+}
+.community-emoji-preview:empty {
+  display: none;
+}
+.community-emoji-preview img {
+  width: 80px;
+  height: 80px;
+  object-fit: contain;
+}
+.channel-create-actions {
+  flex-wrap: wrap;
+}
+.channel-create-actions .settings-action {
+  font-size: 12px;
+}
+@media (max-width: 650px) {
+  .settings-nav-search {
+    font-size: 10px;
+    padding: 8px 6px;
+  }
+  .community-role-row,
+  .community-category-row {
+    flex-wrap: wrap;
+  }
+  .community-role-title {
+    flex-basis: 100%;
+  }
+  .community-emoji-grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .community-member-row .member-setting-identity {
+    min-width: 0;
+    flex-basis: 100%;
+  }
+  .community-member-row button {
+    font-size: 10px;
+  }
+  .community-role-title small {
+    font-size: 10px;
+  }
+  .channel-create-actions .settings-action {
+    width: 100%;
+    font-size: 11px;
+  }
+}
+.settings-content > .preference-row > input[type="checkbox"] {
+  width: 20px;
+  height: 20px;
+  margin: 0;
+  accent-color: var(--accent);
+}

@@ -16,7 +16,9 @@
     "update": "bun src/maintenance.ts update",
     "backup": "bun src/maintenance.ts backup",
     "data": "bun src/maintenance.ts data",
-    "test:retention": "bun tests/retention.mjs"
+    "test:retention": "bun tests/retention.mjs",
+    "test:community": "bun tests/community-interface.mjs",
+    "test:history": "bun tests/history-interface.mjs"
   },
   "devDependencies": {
     "@types/bun": "^1.3.0",
