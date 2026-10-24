@@ -552,6 +552,26 @@ export function createSettings(ctx) {
     }
     if (selected === "notifications") {
       area.append(heading("通知"));
+      const notificationMode = n(
+        "select",
+        { "aria-label": "標準の通知" },
+        ...[
+          ["mentions", "メンションのみ"],
+          ["all", "すべてのメッセージ"],
+          ["silent", "通知しない"],
+        ].map(([value, label]) => n("option", { value }, label)),
+      );
+      notificationMode.value = preferences().notificationMode;
+      notificationMode.onchange = () =>
+        updatePreferences({ notificationMode: notificationMode.value });
+      area.append(
+        n(
+          "label",
+          { class: "preference-row" },
+          n("span", {}, "標準の通知"),
+          notificationMode,
+        ),
+      );
       const desktop = n("input", {
         type: "checkbox",
         role: "switch",
@@ -1413,8 +1433,10 @@ export function createSettings(ctx) {
     }
     if (selected === "notifications") {
       area.append(heading("通知設定"));
-      const current = preferences().guildNotifications?.[g.id] ?? "all";
+      const current = preferences().guildNotifications?.[g.id] ?? "default";
       for (const [value, label] of [
+        ["default", "ユーザー設定に従う"],
+        ["mentions", "メンションのみ"],
         ["all", "すべてのメッセージ"],
         ["silent", "通知しない"],
       ]) {
@@ -1428,7 +1450,7 @@ export function createSettings(ctx) {
           updatePreferences({
             guildNotifications: {
               ...preferences().guildNotifications,
-              [g.id]: value,
+              [g.id]: value === "default" ? undefined : value,
             },
           });
         area.append(

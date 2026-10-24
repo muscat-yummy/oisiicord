@@ -180,7 +180,7 @@ try {
   assert.equal((await state(newcomer.page)).guilds.length, 1);
   await send(newcomer.page, replyText);
   await newcomer.page.reload();
-  await login(newcomer.page, "history_newcomer");
+  await newcomer.page.locator("#workspace").waitFor({ state: "visible" });
   await selectGuild(newcomer.page);
   for (const text of [beforeText, afterText, replyText])
     await newcomer.page

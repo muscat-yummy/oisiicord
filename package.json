@@ -18,7 +18,8 @@
     "data": "bun src/maintenance.ts data",
     "test:retention": "bun tests/retention.mjs",
     "test:community": "bun tests/community-interface.mjs",
-    "test:history": "bun tests/history-interface.mjs"
+    "test:history": "bun tests/history-interface.mjs",
+    "test:login": "bun tests/login-interface.mjs"
   },
   "devDependencies": {
     "@types/bun": "^1.3.0",

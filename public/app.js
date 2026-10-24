@@ -9,6 +9,8 @@ import {
 import { createSettings } from "./settings.js";
 import { createCommunityUI } from "./community-ui.js";
 import * as M from "./membership.js";
+import { rememberLogin, restoreLogin, forgetLogin } from "./login-state.js";
+import { isMentioned, shouldNotify, createMentionInput } from "./mentions.js";
 const $ = (s) => document.querySelector(s);
 const node = (tag, attrs = {}, ...children) => {
   const n = document.createElement(tag);
@@ -529,6 +531,7 @@ function stashDraft() {
 }
 function restoreDraft() {
   const draft = drafts.get(roomId);
+  mentionInput.close();
   $("#message-input").value = draft?.text ?? "";
   attachments = [...(draft?.attachments ?? [])];
   reply = draft?.reply ?? null;
@@ -897,6 +900,10 @@ function renderMessages() {
         tabindex: "0",
         "data-message": m.id,
       });
+    row.classList.toggle(
+      "is-mentioned",
+      !m.deleted && !m.invalid && isMentioned(m.text, me.id, currentGuild()),
+    );
     const face = button("", () => memberDialog(u), "message-avatar");
     face.setAttribute(
       "aria-label",
@@ -1120,6 +1127,7 @@ async function sendMessage(e) {
     sendAttempted = true;
     await sendPayload({ type: "message", text, files: uploaded, reply });
     input.value = "";
+    mentionInput.close();
     input.style.height = "";
     reply = null;
     attachments = [];
@@ -1680,15 +1688,65 @@ async function backup() {
   setTimeout(() => URL.revokeObjectURL(url), 1000);
   toast("パスワードで保護した鍵のバックアップを保存した");
 }
-async function logout() {
-  if (sending) throw Error("送信が完了してからログアウトして");
+async function enterAccount(result, identity) {
+  me = {
+    ...identity,
+    salt: result.salt,
+    vault: result.vault,
+    session: result.session.id,
+  };
+  loadPreferences(me.id);
+  syncVoiceControls();
+  try {
+    storage = JSON.parse(
+      localStorage.getItem("oisiicord-trust-" + me.id) ??
+        '{"pins":{},"versions":{},"verified":{}}',
+    );
+  } catch {
+    storage = { pins: {}, versions: {}, verified: {} };
+  }
+  await pinUser(result.user);
+  $("#password").value = "";
+  await refresh();
+  $("#auth").hidden = true;
+  $("#workspace").hidden = false;
+  connect();
+  if (pendingInvite) await acceptInvite(pendingInvite);
+}
+const loginChannel =
+  "BroadcastChannel" in window ? new BroadcastChannel("oisiicord-login") : null;
+if (loginChannel)
+  loginChannel.onmessage = (event) => {
+    if (
+      me &&
+      ((event.data.type === "logout" && event.data.session === me.session) ||
+        (event.data.type === "login" && event.data.session !== me.session))
+    )
+      guard(() => logout(true));
+  };
+async function logout(revoked = false) {
+  if (sending && !revoked) throw Error("送信が完了してからログアウトして");
+  const sessionId = me?.session;
   await leaveVoice();
   clearTimeout(reconnectTimer);
   clearInterval(heartbeat);
-  ws?.close();
+  if (ws) {
+    ws.onclose = null;
+    ws.close();
+  }
   ws = null;
-  await api("/auth/logout", {});
+  await forgetLogin(sessionId).catch(() => {});
+  if (!revoked) {
+    loginChannel?.postMessage({ type: "logout", session: sessionId });
+    await api("/auth/logout", {}).catch(() => {});
+  }
   me = null;
+  guildId = null;
+  roomId = null;
+  historyCredentials.clear();
+  credentialGenerations.clear();
+  unread.clear();
+  mentionInput.close();
   for (const cached of imageCache.values())
     cached.then((url) => URL.revokeObjectURL(url)).catch(() => {});
   imageCache.clear();
@@ -1702,7 +1760,7 @@ async function logout() {
   state = null;
   $("#workspace").hidden = true;
   $("#auth").hidden = false;
-  $("#modal").close();
+  document.querySelectorAll("dialog[open]").forEach((dialog) => dialog.close());
   $("#password").value = "";
   if (registering) $("#auth-switch").click();
 }
@@ -1717,8 +1775,12 @@ function connect() {
       if (ws?.readyState === 1) ws.send(JSON.stringify({ type: "ping" }));
     }, 30000);
   };
-  ws.onclose = () => {
+  ws.onclose = (event) => {
     clearInterval(heartbeat);
+    if (event.code === 4001) {
+      guard(() => logout(true));
+      return;
+    }
     $("#connection").textContent = "再接続中";
     if (activeVoice) leaveVoice();
     if (me) reconnectTimer = setTimeout(connect, 2500);
@@ -1752,32 +1814,51 @@ function connect() {
         const eventGuild = state.guilds.find((g) =>
           g.channels.some((r) => r.id === m.room),
         );
+        await loadHistory(m.room);
+        const event = histories
+          .get(m.room)
+          ?.events.find((e) => e.seq === m.seq);
         const notify =
-          !eventGuild ||
-          preferences().guildNotifications?.[eventGuild.id] !== "silent";
-        if (
-          notify &&
-          (m.room !== roomId || document.hidden) &&
-          state.me.profile?.status !== "dnd" &&
-          m.author !== me.id
-        )
+          event?.author !== me.id &&
+          !event?.invalid &&
+          shouldNotify(
+            event?.payload,
+            me.id,
+            eventGuild,
+            eventGuild
+              ? (preferences().guildNotifications?.[eventGuild.id] ??
+                  preferences().notificationMode)
+              : "all",
+          );
+        const away =
+          m.room !== roomId || document.hidden || !document.hasFocus();
+        if (notify && away && state.me.profile?.status !== "dnd") {
           sound("message");
-        if (m.room !== roomId) {
-          unread.add(m.room);
-          renderNav();
           if (
             "Notification" in window &&
-            notify &&
             preferences().desktopNotifications &&
-            state.me.profile?.status !== "dnd" &&
-            Notification.permission === "granted" &&
-            document.hidden
-          )
-            new Notification("Oisiicord", {
+            Notification.permission === "granted"
+          ) {
+            const notification = new Notification("Oisiicord", {
               body: "新しいメッセージ",
               icon: "/app-icon",
+              tag: "oisiicord-" + m.room,
             });
-        } else await loadHistory(m.room);
+            notification.onclick = () => {
+              window.focus();
+              guard(() => selectRoom(m.room));
+              notification.close();
+            };
+          }
+        }
+        if (
+          m.room !== roomId &&
+          event?.payload?.type === "message" &&
+          event.author !== me.id
+        ) {
+          unread.add(m.room);
+          renderNav();
+        }
       }
       if (m.type === "typing" && m.room === roomId) {
         typingUsers.set(m.user, Date.now());
@@ -2207,6 +2288,7 @@ const communityUI = createCommunityUI({
   getRoom: currentRoom,
   profileImage,
   avatar,
+  memberDialog,
   getUser: (id) => users.get(id),
   getMessages: projection,
   unpin: (m) => sendPayload({ type: "pin", target: m.id, on: false }),
@@ -2362,25 +2444,17 @@ $("#auth-form").onsubmit = async (e) => {
         username,
       );
     }
-    me = {
+    const identity = {
       ...(await C.importIdentity(privateKeys, result.user.keys)),
       id: result.user.id,
-      salt,
-      vault: result.vault,
     };
-    loadPreferences(me.id);
-    syncVoiceControls();
-    storage = JSON.parse(
-      localStorage.getItem("oisiicord-trust-" + me.id) ??
-        '{"pins":{},"versions":{},"verified":{}}',
-    );
-    await pinUser(result.user);
-    $("#password").value = "";
-    $("#auth").hidden = true;
-    $("#workspace").hidden = false;
-    await refresh();
-    connect();
-    if (pendingInvite) await acceptInvite(pendingInvite);
+    try {
+      await rememberLogin(identity, result.session);
+    } catch {
+      toast("このブラウザではログイン状態を保存できない");
+    }
+    loginChannel?.postMessage({ type: "login", session: result.session.id });
+    await enterAccount(result, identity);
   } catch (error) {
     $("#auth-error").textContent = error.message;
   } finally {
@@ -2473,7 +2547,20 @@ $("#file-input").onchange = () =>
     $("#file-input").value = "";
     renderAttachments();
   });
+const mentionInput = createMentionInput({
+  input: $("#message-input"),
+  getGuild: currentGuild,
+  getUsers: () => {
+    try {
+      return recipients();
+    } catch {
+      return [];
+    }
+  },
+  avatar,
+});
 $("#message-input").onkeydown = (e) => {
+  if (mentionInput.keydown(e)) return;
   if (
     e.key === "Enter" &&
     !e.shiftKey &&
@@ -2539,3 +2626,26 @@ if (
     toast("招待リンクの形式が不正");
   }
 }
+
+async function resumeAccount() {
+  const submit = $("#auth-submit");
+  submit.disabled = true;
+  $("#auth").hidden = true;
+  try {
+    const result = await api("/auth/session");
+    const identity = await restoreLogin(result);
+    if (identity) await enterAccount(result, identity);
+  } catch (error) {
+    if (error.status === 401) await forgetLogin().catch(() => {});
+    else
+      $("#auth-error").textContent =
+        error.message ?? "ログイン状態を復元できない";
+  } finally {
+    submit.disabled = false;
+    if (!state) {
+      me = null;
+      $("#auth").hidden = false;
+    }
+  }
+}
+resumeAccount();

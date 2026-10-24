@@ -1,3 +1,4 @@
+import { mentions } from "./mentions.js";
 import { icon } from "./icons.js";
 
 const groups = [
@@ -190,6 +191,27 @@ export function createCommunityUI(ctx) {
       "開く",
     );
   }
+  function appendMentions(el, text) {
+    let start = 0;
+    for (const m of mentions(text)) {
+      el.append(document.createTextNode(text.slice(start, m.index)));
+      const guild = ctx.getGuild();
+      const user = m.kind === "user" ? ctx.getUser(m.id) : null;
+      const role =
+        m.kind === "role" ? guild?.roles?.find((r) => r.id === m.id) : null;
+      if ((m.kind === "everyone" && guild) || user || role) {
+        const label =
+          "@" + (user?.display ?? user?.username ?? role?.name ?? "everyone");
+        const chip = user
+          ? b(label, () => ctx.memberDialog(user), "mention")
+          : n("span", { class: "mention" }, label);
+        if (role?.color) chip.style.color = role.color;
+        el.append(chip);
+      } else el.append(document.createTextNode(m.raw));
+      start = m.index + m.raw.length;
+    }
+    el.append(document.createTextNode(text.slice(start)));
+  }
   function richText(text) {
     const el = n("div", { class: "message-text" });
     const pattern =
@@ -197,7 +219,7 @@ export function createCommunityUI(ctx) {
     const source = String(text);
     let start = 0;
     for (const match of source.matchAll(pattern)) {
-      el.append(document.createTextNode(source.slice(start, match.index)));
+      appendMentions(el, source.slice(start, match.index));
       if (match[1] !== undefined) {
         const delimiter = match[1].indexOf("|"),
           raw = delimiter < 0 ? match[1] : match[1].slice(0, delimiter),
@@ -229,7 +251,7 @@ export function createCommunityUI(ctx) {
       }
       start = match.index + match[0].length;
     }
-    el.append(document.createTextNode(source.slice(start)));
+    appendMentions(el, source.slice(start));
     return el;
   }
   function emojiPicker({ anchor, onSelect, mode = "insert" } = {}) {

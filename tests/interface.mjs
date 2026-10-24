@@ -263,9 +263,6 @@ try {
       .getByRole("button", { name: "設定を閉じる", exact: true })
       .click();
     await page.reload();
-    await page.locator("#username").fill("interface_alice");
-    await page.locator("#password").fill("Interface-test-password-2026");
-    await page.locator("#auth-submit").click();
     await page.locator("#workspace").waitFor({ state: "visible" });
     await page
       .getByRole("button", { name: "Oisiicord 開発室", exact: true })

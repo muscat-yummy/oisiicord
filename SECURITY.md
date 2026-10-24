@@ -46,3 +46,9 @@ Use a dedicated HTTPS origin, a patched Bun runtime, strict control over who can
 Invite revocation via the HTTP API is an application authorization decision. A malicious server colluding with a revoked bearer can attempt to backdate admission under the same signed roster base. An owner-signed roster update advances that base and invalidates the old capability cryptographically; member removal performs this consolidation. Invite snapshots and links grant conversation-history access to their recipients and should be treated as access credentials.
 
 History-key recipients are bound to the guild ID and owner-signed roster base. Clients remember the highest owner-signed base seen on that browser; a larger unsigned membership index cannot replace it with an older signed base. This local trust does not establish freshness on a new browser or device.
+
+## Remembered browser login
+
+After a successful password login, the browser stores non-extractable ECDSA/ECDH CryptoKey objects in IndexedDB. Passwords, authentication secrets, plaintext PKCS#8 keys, and vault decryption keys are not persisted. Restoration requires both the existing HttpOnly session cookie and the matching stored session identifier, user ID, public keys, and expiry. The authenticated session endpoint returns only public identity data, salt, the encrypted vault, and non-authenticating session metadata. Logout removes the local keys and revokes the server session; other open tabs receive the logout. Sessions still expire after seven days. Browser data removal requires another password login.
+
+A remembered login lets anyone with access to the unlocked browser profile use that account. Non-extractable keys prevent the exportKey API from exporting them, but do not protect against compromised same-origin JavaScript or access to the browser profile. The existing malicious-server/client-delivery limitations continue to apply.

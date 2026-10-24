@@ -387,24 +387,24 @@ export function createApp(
     ensureMembershipLimit: community.ensureMembershipLimit,
   });
   const branding = createBranding(projectRoot, common);
+  function sessionData(uid: string, tokenHash: string, expires: number) {
+    const row = one("SELECT salt,vault FROM users WHERE id=?", uid)!;
+    return {
+      user: user(uid),
+      salt: row.salt,
+      vault: JSON.parse(row.vault),
+      session: { id: sha(tokenHash), expires },
+    };
+  }
   function sessionResponse(uid: string) {
     const token =
       Bun.randomUUIDv7() +
       btoa(String.fromCharCode(...crypto.getRandomValues(new Uint8Array(32))));
     const expires = Date.now() + 7 * 86400000;
     run("INSERT INTO sessions VALUES(?,?,?)", sha(token), uid, expires);
-    return response(
-      {
-        user: user(uid),
-        vault: JSON.parse(
-          one("SELECT vault FROM users WHERE id=?", uid)!.vault,
-        ),
-      },
-      200,
-      {
-        "Set-Cookie": `${cookieName}=${token}; Path=/; HttpOnly; SameSite=Strict; Max-Age=604800${secure ? "; Secure" : ""}`,
-      },
-    );
+    return response(sessionData(uid, sha(token), expires), 200, {
+      "Set-Cookie": `${cookieName}=${token}; Path=/; HttpOnly; SameSite=Strict; Max-Age=604800${secure ? "; Secure" : ""}`,
+    });
   }
   async function api(req: Request, url: URL, server: Bun.Server<WSData>) {
     const p = url.pathname,
@@ -504,6 +504,8 @@ export function createApp(
       })
         ? undefined
         : response({ error: "WebSocket upgrade required" }, 400);
+    if (p === "/api/auth/session" && method === "GET")
+      return response(sessionData(uid, session.token, session.expires));
     if (p === "/api/auth/logout" && method === "POST") {
       run("DELETE FROM sessions WHERE token=?", session.token);
       for (const ws of sockets)
@@ -1266,6 +1268,8 @@ export function createApp(
           "/settings.js": "settings.js",
           "/community-ui.js": "community-ui.js",
           "/membership.js": "membership.js",
+          "/mentions.js": "mentions.js",
+          "/login-state.js": "login-state.js",
           "/community-ui.css": "community-ui.css",
           "/community-settings.css": "community-settings.css",
           "/shell.css": "shell.css",

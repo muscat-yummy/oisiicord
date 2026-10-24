@@ -1,6 +1,7 @@
 export const defaults = {
   theme: "dark",
   guildNotifications: {},
+  notificationMode: "mentions",
   collapsedCategories: {},
   groupMessages: true,
   messageSpacing: 16,
