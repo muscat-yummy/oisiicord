@@ -81,7 +81,10 @@ const paths = {
   copy: ["M9 9h13v13H9zM5 15H2V2h13v3"],
   search: ["M21 21l-5-5", "M18 10a8 8 0 1 1-16 0 8 8 0 0 1 16 0Z"],
   shield: ["m12 2 9 4v6c0 6-9 10-9 10S3 18 3 12V6l9-4ZM8 12l3 3 5-6"],
-  accessibility: ["M12 3h.01M4 7l8 2 8-2M12 9v5m0 0-5 7m5-7 5 7"],
+  accessibility: [
+    "M14.5 4.5a2.5 2.5 0 1 1-5 0 2.5 2.5 0 0 1 5 0Z",
+    "M4 10l8 2 8-2M12 12v4m0 0-5 7m5-7 5 7",
+  ],
 };
 export function icon(name, size = 22) {
   const ns = "http://www.w3.org/2000/svg",

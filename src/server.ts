@@ -1270,6 +1270,8 @@ export function createApp(
           "/membership.js": "membership.js",
           "/mentions.js": "mentions.js",
           "/login-state.js": "login-state.js",
+          "/workspace-ui.js": "workspace-ui.js",
+          "/workspace-ui.css": "workspace-ui.css",
           "/community-ui.css": "community-ui.css",
           "/community-settings.css": "community-settings.css",
           "/shell.css": "shell.css",

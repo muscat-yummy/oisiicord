@@ -172,10 +172,6 @@ async function createChannel(page, label, name) {
     .locator("#modal")
     .getByLabel("チャンネル名", { exact: true })
     .fill(name);
-  await page
-    .locator("#modal")
-    .getByLabel("カテゴリ", { exact: true })
-    .selectOption({ label: "サーバー案内" });
   await page.locator("#modal-submit").click();
   await page
     .locator(".channel-setting-title strong")

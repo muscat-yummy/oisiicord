@@ -9,6 +9,7 @@ import {
 import { createSettings } from "./settings.js";
 import { createCommunityUI } from "./community-ui.js";
 import * as M from "./membership.js";
+import { createWorkspaceUI } from "./workspace-ui.js";
 import { rememberLogin, restoreLogin, forgetLogin } from "./login-state.js";
 import { isMentioned, shouldNotify, createMentionInput } from "./mentions.js";
 const $ = (s) => document.querySelector(s);
@@ -362,6 +363,7 @@ function renderNav() {
       );
       b.classList.add("has-image");
     }
+    workspaceUI.bind(b, () => workspaceUI.guildItems(g));
     list.append(b);
   }
   const g = currentGuild();
@@ -402,8 +404,11 @@ function renderNav() {
             newChannel("text", undefined, group.id),
           ),
         );
-      channels.append(heading);
-      if (collapsed) continue;
+      if (group.id) {
+        workspaceUI.bind(heading, () => workspaceUI.categoryItems(g, group));
+        channels.append(heading);
+        if (collapsed) continue;
+      }
       for (const r of g.channels.filter(
         (r) => (r.category ?? null) === group.id,
       )) {
@@ -435,6 +440,7 @@ function renderNav() {
         b.setAttribute("aria-label", r.name);
         if (activeVoice === r.id)
           b.append(node("span", { class: "badge" }, "接続中"));
+        workspaceUI.bind(b, () => workspaceUI.channelItems(g, r));
         channels.append(b);
         if (kind === "voice")
           for (const entry of state.voice ?? []) {
@@ -481,10 +487,6 @@ function renderNav() {
       );
       channels.append(b);
     }
-    if (!state.dms.length)
-      channels.append(
-        node("p", { class: "empty" }, "＋ から相手のユーザー名を指定"),
-      );
   }
   const r = currentRoom();
   $("#room-name").textContent = r
@@ -589,9 +591,17 @@ function renderMembers() {
       : (currentGuild()?.roster.members.map((m) => ({
           ...users.get(m.id),
           ...m,
-        })) ?? []);
+        })) ??
+        state.users.filter(
+          (u) =>
+            u.id !== me.id &&
+            state.online.includes(u.id) &&
+            u.profile?.status !== "invisible",
+        ));
   } catch {}
-  $("#members-panel h2").textContent = "メンバー — " + list.length;
+  $("#members-panel h2").textContent =
+    (!currentRoom() && !currentGuild() ? "オンライン — " : "メンバー — ") +
+    list.length;
   for (const u of list) {
     const b = button("", () => memberDialog(u), "member");
     b.append(
@@ -847,15 +857,7 @@ function renderMessages() {
     return;
   }
   if (!r) {
-    const welcome = node(
-      "div",
-      { class: "welcome" },
-      node("div", { class: "welcome-icon" }, icon("users", 34)),
-      node("h2", {}, "ダイレクトメッセージ"),
-      button("DM を開始", newDM, "primary"),
-      button("サーバーを作成", createGuild),
-    );
-    area.append(welcome);
+    area.append(workspaceUI.home());
     return;
   }
   const query = $("#search").value.toLowerCase();
@@ -1178,6 +1180,7 @@ function modal(title, body, submit, label = "保存") {
   $("#modal-body").replaceChildren(...(Array.isArray(body) ? body : [body]));
   $("#modal-error").textContent = "";
   $("#modal-submit").hidden = !submit;
+  $("#modal-cancel").textContent = submit ? "キャンセル" : "閉じる";
   $("#modal-submit").textContent = label;
   $("#modal-form").onsubmit = async (e) => {
     e.preventDefault();
@@ -1290,6 +1293,7 @@ async function inviteDialog(onCreated) {
       "リンクを作成",
       async () => {
         generate.disabled = true;
+        generate.textContent = "リンクを作成中…";
         try {
           const events = [];
           for (const room of g.channels.filter((r) => r.kind !== "voice")) {
@@ -1349,21 +1353,40 @@ async function inviteDialog(onCreated) {
           if (typeof onCreated === "function") await onCreated();
         } finally {
           generate.disabled = false;
+          generate.textContent = result.hidden
+            ? "リンクを作成"
+            : "新しいリンクを作成";
         }
       },
       "primary",
     );
-  modal("招待リンク", [
+  modal(
+    "友達を招待",
     node(
       "div",
-      { class: "invite-options" },
-      node("label", {}, "有効期限", expiry),
-      node("label", {}, "利用回数", uses),
+      { class: "invite-panel" },
+      node(
+        "div",
+        { class: "invite-server-preview" },
+        avatar({ display: g.name, profile: { avatar: g.profile?.icon } }),
+        node(
+          "div",
+          {},
+          node("h3", {}, g.name),
+          node("small", {}, g.roster.members.length + "人のメンバー"),
+        ),
+      ),
+      node(
+        "div",
+        { class: "invite-options" },
+        node("label", {}, "有効期限", expiry),
+        node("label", {}, "利用回数", uses),
+      ),
+      node("label", { class: "invite-approval" }, approval, "参加に承認が必要"),
+      generate,
+      result,
     ),
-    node("label", { class: "invite-approval" }, approval, "参加に承認が必要"),
-    generate,
-    result,
-  ]);
+  );
 }
 async function acceptInvite(data) {
   if (data?.short) {
@@ -1482,56 +1505,8 @@ async function updateRoster(members) {
   );
   await refresh();
 }
-function newChannel(kind, onCreated, category = null) {
-  const g = currentGuild(),
-    name = node("input", {
-      required: true,
-      maxlength: 60,
-      "aria-label": "チャンネル名",
-    }),
-    group = node(
-      "select",
-      { "aria-label": "カテゴリ" },
-      node("option", { value: "" }, "カテゴリなし"),
-      ...(g.categories ?? []).map((c) =>
-        node("option", { value: c.id }, c.name),
-      ),
-    ),
-    type = node(
-      "select",
-      { "aria-label": "種類" },
-      ...[
-        ["text", "テキスト"],
-        ["voice", "ボイス"],
-        ["announcement", "お知らせ"],
-        ["rules", "ルール"],
-      ].map(([value, label]) => node("option", { value }, label)),
-    );
-  group.value = category ?? "";
-  type.value = kind;
-  modal(
-    "チャンネルを作成",
-    [
-      node("label", {}, "チャンネル名", name),
-      node("label", {}, "種類", type),
-      node("label", {}, "カテゴリ", group),
-    ],
-    async () => {
-      const created = await api("/guilds/" + g.id + "/channels", {
-        name: name.value,
-        kind: type.value,
-      });
-      if (group.value)
-        await api(
-          "/guilds/" + g.id + "/channelmeta/" + created.id,
-          { category: group.value },
-          "PATCH",
-        );
-      await refresh();
-      if (typeof onCreated === "function") await onCreated();
-    },
-    "作成",
-  );
+function newChannel(kind = "text", onCreated, category = null) {
+  workspaceUI.channelDialog({ kind, category, onSaved: onCreated });
 }
 
 function newDM() {
@@ -1552,19 +1527,7 @@ function newDM() {
   );
 }
 async function memberDialog(u) {
-  const profile = u.profile ?? {},
-    card = node(
-      "div",
-      { class: "member-profile-card" },
-      node("div", { class: "member-profile-banner" }),
-      avatar(u),
-      node("h3", {}, u.display),
-      node("small", {}, "@" + u.username),
-      node("p", {}, profile.pronouns ?? ""),
-      node("p", {}, profile.bio ?? ""),
-    );
-  card.querySelector(".member-profile-banner").style.background =
-    profile.bannerColor ?? "#8b7cf8";
+  const card = workspaceUI.profileCard(u);
   const actions = node("div", { class: "buttons" });
   if (u.id !== me.id)
     actions.append(
@@ -1623,7 +1586,7 @@ async function memberDialog(u) {
       ),
     );
   card.append(roleChips(u.id), actions);
-  modal(u.display, card);
+  modal("プロフィール", card);
 }
 function reactionDialog(m) {
   communityUI.emojiPicker({
@@ -1793,6 +1756,7 @@ function connect() {
         state.online = state.online.filter((id) => id !== m.user);
         if (m.online) state.online.push(m.user);
         renderMembers();
+        if (!currentRoom()) renderMessages();
       }
       if (m.type === "voice-presence" && state) {
         const previous = (state.voice ?? [])
@@ -2269,6 +2233,7 @@ const settingsUI = createSettings({
   updateRoster,
   inviteDialog,
   newChannel,
+  editChannel: (r, onSaved) => workspaceUI.channelDialog({ room: r, onSaved }),
   approveDialog,
   getState: () => state,
   getMe: () => me,
@@ -2306,6 +2271,64 @@ const communityUI = createCommunityUI({
   },
   renderMessages,
   preferences,
+});
+const workspaceUI = createWorkspaceUI({
+  node,
+  button,
+  api,
+  modal,
+  guard,
+  toast,
+  avatar,
+  hasPermission,
+  can: hasPermission,
+  getState: () => state,
+  getMe: () => me,
+  getGuild: currentGuild,
+  refresh,
+  selectGuild,
+  memberDialog,
+  renderMessages,
+  query: () => $("#search").value,
+  serverSettings: () => settingsUI.server(),
+  closeSettings: () => settingsUI.close(),
+  invite: inviteDialog,
+  newDM,
+  createGuild,
+  markRead: (id) => {
+    unread.delete(id);
+    renderNav();
+  },
+  startDM: async (u) => {
+    const { id } = await api("/dms", { user: u.id });
+    pinDMPeers(id, [me.id, u.id]);
+    guildId = null;
+    await refresh();
+    await selectRoom(id);
+  },
+});
+workspaceUI.bind($(".side-header"), () =>
+  currentGuild() ? workspaceUI.guildItems(currentGuild()) : [],
+);
+$("#channel-list").addEventListener("contextmenu", (event) => {
+  if (
+    event.target.closest(".channel, .category-heading") ||
+    !currentGuild() ||
+    !hasPermission("manageChannels")
+  )
+    return;
+  workspaceUI.menu(event, [
+    {
+      label: "チャンネルを作成",
+      icon: "plus",
+      action: () => newChannel("text"),
+    },
+    {
+      label: "カテゴリを作成",
+      icon: "folder",
+      action: () => workspaceUI.categoryDialog(currentGuild()),
+    },
+  ]);
 });
 for (const [id, name, label] of [
   ["add-guild", "plus", "サーバー作成・招待から参加"],
@@ -2598,8 +2621,12 @@ $("#emoji").onclick = () =>
   });
 $("#search").oninput = renderMessages;
 $("#pins").onclick = () => communityUI.pins({ anchor: $("#pins") });
-$("#toggle-members").onclick = () =>
-  $("#workspace").classList.toggle("show-members");
+$("#toggle-members").onclick = () => {
+  const visible = getComputedStyle($("#members-panel")).display !== "none";
+  $("#workspace").classList.toggle("members-hidden", visible);
+  $("#workspace").classList.toggle("show-members", !visible);
+  $("#toggle-members").setAttribute("aria-pressed", String(!visible));
+};
 $("#mobile-channels").onclick = () =>
   $("#workspace").classList.toggle("show-sidebar");
 $("#modal-close").onclick = () => $("#modal").close();

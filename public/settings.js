@@ -808,15 +808,6 @@ export function createSettings(ctx) {
       el.value = value ?? "";
       return el;
     };
-    const categoryInput = (value) =>
-      choose(
-        "カテゴリ",
-        [
-          ["", "カテゴリなし"],
-          ...(g.categories ?? []).map((c) => [c.id, c.name]),
-        ],
-        value ?? "",
-      );
     const permissionNames = [
       ["administrator", "管理者"],
       ["manageChannels", "チャンネルを管理"],
@@ -1550,67 +1541,9 @@ export function createSettings(ctx) {
             () => move(index, 1),
             index === g.channels.length - 1,
           );
-          control(r.name + "を編集", "edit", () => {
-            const name = input(r.name, { maxlength: 60, required: true }),
-              topic = n(
-                "textarea",
-                { rows: 3, maxlength: 1024 },
-                r.topic ?? "",
-              );
-            const category = categoryInput(r.category),
-              slowmode = choose(
-                "スローモード",
-                [
-                  [0, "なし"],
-                  [5, "5秒"],
-                  [10, "10秒"],
-                  [30, "30秒"],
-                  [60, "1分"],
-                  [300, "5分"],
-                  [600, "10分"],
-                  [3600, "1時間"],
-                ],
-                String(r.slowmode ?? 0),
-              );
-            const kind = choose(
-              "種類",
-              [
-                ["text", "テキスト"],
-                ["voice", "ボイス"],
-                ["announcement", "お知らせ"],
-                ["rules", "ルール"],
-              ],
-              r.kind,
-            );
-            ctx.modal(
-              "チャンネルを編集",
-              [
-                field("チャンネル名", name),
-                field("説明", topic),
-                field("種類", kind),
-                field("カテゴリ", category),
-                field("スローモード", slowmode),
-              ],
-              async () => {
-                await api(
-                  "/rooms/" + r.id,
-                  { name: name.value, topic: topic.value },
-                  "PATCH",
-                );
-                await api(
-                  "/guilds/" + g.id + "/channelmeta/" + r.id,
-                  {
-                    category: category.value || null,
-                    kind: kind.value,
-                    slowmode: Number(slowmode.value),
-                  },
-                  "PATCH",
-                );
-                await ctx.refresh();
-                await refreshPage("channels");
-              },
-            );
-          });
+          control(r.name + "を編集", "edit", () =>
+            ctx.editChannel(r, () => refreshPage("channels")),
+          );
           control(r.name + "を削除", "trash", () =>
             ctx.modal(
               "チャンネルを削除",
