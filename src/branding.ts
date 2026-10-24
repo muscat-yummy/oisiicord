@@ -69,6 +69,7 @@ export function createBranding(
         "/settings/icon.png",
         "/settings/dm.mp3",
         "/api/branding",
+        "/api/changelog",
         "/manifest.webmanifest",
       ].includes(route)
     )
@@ -79,6 +80,22 @@ export function createBranding(
         headers: headers({ Allow: "GET, HEAD" }),
       });
     const head = req.method === "HEAD";
+    if (route === "/api/changelog") {
+      const asset = regularAsset("changelog.md", 128 * 1024);
+      let content = "";
+      if (asset) {
+        try {
+          content = new TextDecoder("utf-8", { fatal: true }).decode(
+            readFileSync(asset.path),
+          );
+        } catch {
+          /* An unreadable local file does not break the home screen. */
+        }
+      }
+      return new Response(head ? null : JSON.stringify({ content }), {
+        headers: headers({ "Content-Type": "application/json; charset=utf-8" }),
+      });
+    }
     if (route === "/api/branding") {
       return new Response(
         head

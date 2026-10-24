@@ -117,3 +117,37 @@ test("invalid, oversized and symlinked custom files are rejected", async () => {
     expect((await request("/settings/icon.png"))!.status).toBe(404);
   }
 });
+
+test("host-written changelog is optional and read fresh without serving other settings", async () => {
+  const { root, request } = fixture(),
+    path = join(root, "settings", "changelog.md");
+  expect(await (await request("/api/changelog"))!.json()).toEqual({
+    content: "",
+  });
+  const content = "## 2026-10-25 自分で書いた更新\n\n本文\n- 変更点";
+  writeFileSync(path, content);
+  expect(await (await request("/api/changelog"))!.json()).toEqual({ content });
+  writeFileSync(path, "## 書き換えた更新");
+  expect(await (await request("/api/changelog"))!.json()).toEqual({
+    content: "## 書き換えた更新",
+  });
+  expect(
+    await (await request("/api/changelog", { method: "HEAD" }))!.text(),
+  ).toBe("");
+  expect((await request("/api/changelog", { method: "POST" }))!.status).toBe(
+    405,
+  );
+  expect(await request("/settings/changelog.md")).toBeUndefined();
+  writeFileSync(path, Buffer.alloc(128 * 1024 + 1));
+  expect(await (await request("/api/changelog"))!.json()).toEqual({
+    content: "",
+  });
+  if (process.platform !== "win32") {
+    rmSync(path);
+    writeFileSync(join(root, "outside.md"), "private file");
+    symlinkSync(join(root, "outside.md"), path);
+    expect(await (await request("/api/changelog"))!.json()).toEqual({
+      content: "",
+    });
+  }
+});

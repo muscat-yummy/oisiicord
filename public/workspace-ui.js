@@ -1,4 +1,5 @@
 import { icon } from "./icons.js";
+import { parseChangelog } from "./changelog.js";
 export function createWorkspaceUI(ctx) {
   const { node: n, button: b, api, modal } = ctx;
   let activeMenu = null,
@@ -520,7 +521,53 @@ export function createWorkspaceUI(ctx) {
       );
     return n("div", { class: "workspace-profile" }, banner, identity, content);
   }
+  let updateEntries = [],
+    updateSource = null,
+    updatesLoading = false,
+    updatesFetchedAt = 0;
+  async function refreshUpdates() {
+    if (updatesLoading) return;
+    updatesLoading = true;
+    updatesFetchedAt = Date.now();
+    try {
+      const response = await fetch("/api/changelog", { cache: "no-store" });
+      if (!response.ok) return;
+      const result = await response.json();
+      if (typeof result.content !== "string" || result.content === updateSource)
+        return;
+      updateSource = result.content;
+      updateEntries = parseChangelog(result.content);
+      if (document.querySelector(".workspace-home")) ctx.renderMessages();
+    } catch {
+      /* Keep the last successfully loaded local log. */
+    } finally {
+      updatesLoading = false;
+    }
+  }
+  window.addEventListener("focus", () => {
+    if (document.querySelector(".workspace-home")) refreshUpdates();
+  });
+  function updateCard(entry) {
+    const card = n("article", { class: "update-card" });
+    if (entry.date) card.append(n("div", { class: "update-date" }, entry.date));
+    if (entry.title) card.append(n("h3", {}, entry.title));
+    let list = null;
+    for (const block of entry.blocks) {
+      if (block.type === "bullet") {
+        if (!list) {
+          list = n("ul");
+          card.append(list);
+        }
+        list.append(n("li", {}, block.text));
+      } else {
+        list = null;
+        card.append(n("p", {}, block.text));
+      }
+    }
+    return card;
+  }
   function home() {
+    if (Date.now() - updatesFetchedAt > 10000) refreshUpdates();
     const state = ctx.getState(),
       me = ctx.getMe(),
       query = ctx.query().toLocaleLowerCase();
@@ -594,36 +641,14 @@ export function createWorkspaceUI(ctx) {
       b("DM を開始", ctx.newDM, "primary"),
       b("サーバーを作成", ctx.createGuild),
     );
-    const updates = n(
-      "aside",
-      { class: "home-updates" },
-      n("h2", {}, icon("history", 20), "アップデートログ"),
-      n(
-        "article",
-        { class: "update-card" },
-        n("div", { class: "update-date" }, "2026.10.25", n("span", {}, "NEW")),
-        n("h3", {}, "右クリック、解禁"),
-        n("p", {}, "チャンネル・カテゴリ・サーバーの編集や削除を、その場で。"),
-        n(
-          "ul",
-          {},
-          n("li", {}, "編集画面とプロフィールを整理"),
-          n("li", {}, "ホームにオンライン一覧を追加"),
-          n("li", {}, "小さすぎた人型アイコンも修正"),
-        ),
-      ),
-      n(
-        "article",
-        { class: "update-card" },
-        n("div", { class: "update-date" }, "2026.10.24"),
-        n("h3", {}, "ログインのやり直しを削減"),
-        n(
-          "p",
-          {},
-          "タブを閉じてもログインを保持。メンションはユーザー・ロール・everyoneに対応。",
-        ),
-      ),
-    );
+    const updates = updateEntries.length
+      ? n(
+          "aside",
+          { class: "home-updates" },
+          n("h2", {}, icon("history", 20), "アップデートログ"),
+          ...updateEntries.map(updateCard),
+        )
+      : null;
     return n(
       "div",
       { class: "workspace-home" },

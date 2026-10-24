@@ -169,3 +169,21 @@ test("publication errors roll back replaced source files and retain user files",
   );
   expect(readFileSync(join(root, ".env"), "utf8")).toBe("PORT=4000\n");
 });
+
+test("ZIP updates preserve the host-written changelog even when the archive includes one", async () => {
+  const { root, storage } = setup(),
+    revision = "e".repeat(40),
+    content = "## My update\n\nHost-written text";
+  mkdirSync(join(root, "settings"));
+  writeFileSync(join(root, "settings", "changelog.md"), content);
+  await updateArchive(root, {
+    storage,
+    fetcher: fetcher(
+      revision,
+      await archive(revision, { "settings/changelog.md": "replacement text" }),
+    ),
+  });
+  expect(readFileSync(join(root, "settings", "changelog.md"), "utf8")).toBe(
+    content,
+  );
+});

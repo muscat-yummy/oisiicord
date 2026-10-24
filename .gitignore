@@ -7,3 +7,5 @@ playwright-report/
 .oisiicord-update.json
 settings/icon.png
 settings/dm.mp3
+
+/settings/changelog.md

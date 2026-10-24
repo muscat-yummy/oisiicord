@@ -1271,6 +1271,7 @@ export function createApp(
           "/mentions.js": "mentions.js",
           "/login-state.js": "login-state.js",
           "/workspace-ui.js": "workspace-ui.js",
+          "/changelog.js": "changelog.js",
           "/workspace-ui.css": "workspace-ui.css",
           "/community-ui.css": "community-ui.css",
           "/community-settings.css": "community-settings.css",

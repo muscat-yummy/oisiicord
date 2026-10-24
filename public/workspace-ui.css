@@ -621,3 +621,13 @@
     padding: 8px 12px 20px;
   }
 }
+
+.workspace-home:not(:has(.home-updates)) {
+  grid-template-columns: minmax(0, 1fr);
+}
+.update-card p {
+  white-space: pre-wrap;
+}
+.update-card p + p {
+  margin-top: 10px;
+}
