@@ -1,4 +1,9 @@
 const paths = {
+  folder: ["M3 5h7l2 3h11v13H3V5Z"],
+  book: ["M3 4h8l2 2 2-2h8v17h-8l-2 2-2-2H3V4ZM13 6v17"],
+  megaphone: ["M3 10v6h5l12 5V5L8 10H3ZM8 16l2 7h4l-2-5M23 10v6"],
+  reply: ["m9 5-7 7 7 7M2 12h12c5 0 8 3 8 9"],
+  download: ["M12 3v13m-5-5 5 5 5-5M3 18v4h18v-4"],
   up: ["m6 14 6-6 6 6"],
   down: ["m6 10 6 6 6-6"],
   history: ["M3 11a9 9 0 1 1 2 7M3 4v7h7M12 7v5l3 2"],

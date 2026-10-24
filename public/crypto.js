@@ -147,7 +147,7 @@ export async function verify(value, signature, keys) {
     return false;
   }
 }
-async function shared(privateKey, publicKey, context) {
+export async function shared(privateKey, publicKey, context) {
   const publicCrypto = await subtle.importKey(
     "spki",
     unb64(publicKey),
@@ -185,6 +185,7 @@ export async function seal(
     identity: me,
     version = 0,
     id = crypto.randomUUID(),
+    historyWrap = /** @type {any} */ (null),
   },
 ) {
   const ephemeral = await subtle.generateKey(
@@ -199,6 +200,7 @@ export async function seal(
     author,
     version,
     at: Date.now(),
+    type: payload.type,
     ephemeral: b64(await subtle.exportKey("spki", ephemeral.publicKey)),
   };
   const context = canonical(header),
@@ -215,11 +217,28 @@ export async function seal(
   const body = {
     header,
     boxes,
+    historyBoxes: {},
     payload: await lock(contentKey, bytes(JSON.stringify(payload)), context),
   };
+  if (historyWrap)
+    body.historyBoxes = await historyWrap(
+      contentKey,
+      ephemeral.privateKey,
+      context,
+    );
   return { ...body, signature: await sign(body, me) };
 }
-export async function open(envelope, me, authorKeys, expectedRoom) {
+export async function contentKey(envelope, me) {
+  const context = canonical(envelope.header),
+    box = envelope.boxes?.[me.id];
+  if (!box) throw Error("この端末宛ての暗号鍵がない");
+  return unlock(
+    await shared(me.exchange, envelope.header.ephemeral, context + "/" + me.id),
+    box,
+    context + "/" + me.id,
+  );
+}
+export async function openWithKey(envelope, key, authorKeys, expectedRoom) {
   const { signature, ...body } = envelope,
     { header } = body;
   if (
@@ -228,16 +247,20 @@ export async function open(envelope, me, authorKeys, expectedRoom) {
     !(await verify(body, signature, authorKeys))
   )
     throw Error("署名が一致しないメッセージ");
-  const context = canonical(header),
-    box = body.boxes[me.id];
-  if (!box) throw Error("この端末宛ての暗号鍵がない");
-  const wrapping = await shared(
-    me.exchange,
-    header.ephemeral,
-    context + "/" + me.id,
+  const payload = JSON.parse(
+    dec.decode(await unlock(key, body.payload, canonical(header))),
   );
-  const key = await unlock(wrapping, box, context + "/" + me.id);
-  return JSON.parse(dec.decode(await unlock(key, body.payload, context)));
+  if (header.type !== undefined && payload.type !== header.type)
+    throw Error("メッセージの種類が一致しない");
+  return payload;
+}
+export async function open(envelope, me, authorKeys, expectedRoom) {
+  return openWithKey(
+    envelope,
+    await contentKey(envelope, me),
+    authorKeys,
+    expectedRoom,
+  );
 }
 export async function encryptVault(privateKeys, key, user) {
   return lock(

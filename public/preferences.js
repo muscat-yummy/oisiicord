@@ -1,6 +1,9 @@
 export const defaults = {
   theme: "dark",
   guildNotifications: {},
+  collapsedCategories: {},
+  groupMessages: true,
+  messageSpacing: 16,
   accent: "#5865f2",
   fontSize: 15,
   compact: false,
@@ -55,6 +58,10 @@ export function applyPreferences() {
     prefs.fontSize + "px",
   );
   document.body.classList.toggle("compact-messages", prefs.compact);
+  document.documentElement.style.setProperty(
+    "--message-gap",
+    prefs.messageSpacing + "px",
+  );
   document.body.classList.toggle("reduce-motion", prefs.reducedMotion);
   document.body.classList.toggle("high-contrast", prefs.highContrast);
   document.body.classList.toggle("hide-timestamps", !prefs.showTimestamps);

@@ -2,7 +2,9 @@ import { Database } from "bun:sqlite";
 import { existsSync, mkdirSync } from "node:fs";
 import { backupDatabase } from "./storage";
 import { dirname } from "node:path";
-export const SCHEMA_VERSION = 1;
+import { COMMUNITY_SCHEMA } from "./community";
+import { INVITATION_SCHEMA } from "./invitations";
+export const SCHEMA_VERSION = 2;
 export function database(path: string, backupDir?: string) {
   const existing = path !== ":memory:" && existsSync(path);
   if (path !== ":memory:") mkdirSync(dirname(path), { recursive: true });
@@ -19,15 +21,24 @@ export function database(path: string, backupDir?: string) {
           backupDatabase(path, backupDir, "before-schema-v" + SCHEMA_VERSION),
       );
     db.exec(
-      "PRAGMA journal_mode=WAL; PRAGMA foreign_keys=ON; PRAGMA busy_timeout=5000",
+      "PRAGMA journal_mode=WAL; PRAGMA foreign_keys=OFF; PRAGMA busy_timeout=5000",
     );
     db.transaction(() => {
+      const oldGuilds = db
+        .query(
+          "SELECT sql FROM sqlite_master WHERE type='table' AND name='guilds'",
+        )
+        .get() as { sql: string } | null;
+      if (oldGuilds && /owner\s+TEXT\s+UNIQUE/i.test(oldGuilds.sql))
+        db.exec(
+          `CREATE TABLE guilds_v2(id TEXT PRIMARY KEY,owner TEXT NOT NULL REFERENCES users(id),name TEXT NOT NULL,roster TEXT NOT NULL,signature TEXT NOT NULL,version INTEGER NOT NULL); INSERT INTO guilds_v2 SELECT * FROM guilds; DROP TABLE guilds; ALTER TABLE guilds_v2 RENAME TO guilds;`,
+        );
       db.exec(`CREATE TABLE IF NOT EXISTS users(id TEXT PRIMARY KEY, username TEXT UNIQUE NOT NULL, display TEXT NOT NULL,
       salt TEXT NOT NULL, auth TEXT NOT NULL, vault TEXT NOT NULL, keys TEXT NOT NULL, created INTEGER NOT NULL);
     CREATE TABLE IF NOT EXISTS profiles(user TEXT PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE, data TEXT NOT NULL);
     CREATE TABLE IF NOT EXISTS guild_profiles(guild TEXT PRIMARY KEY REFERENCES guilds(id) ON DELETE CASCADE, data TEXT NOT NULL);
     CREATE TABLE IF NOT EXISTS sessions(token TEXT PRIMARY KEY, user TEXT NOT NULL REFERENCES users(id), expires INTEGER NOT NULL);
-    CREATE TABLE IF NOT EXISTS guilds(id TEXT PRIMARY KEY, owner TEXT UNIQUE NOT NULL REFERENCES users(id), name TEXT NOT NULL,
+    CREATE TABLE IF NOT EXISTS guilds(id TEXT PRIMARY KEY, owner TEXT NOT NULL REFERENCES users(id), name TEXT NOT NULL,
       roster TEXT NOT NULL, signature TEXT NOT NULL, version INTEGER NOT NULL);
     CREATE TABLE IF NOT EXISTS rosters(guild TEXT NOT NULL REFERENCES guilds(id) ON DELETE CASCADE, version INTEGER NOT NULL, roster TEXT NOT NULL, signature TEXT NOT NULL, PRIMARY KEY(guild,version));
     CREATE TABLE IF NOT EXISTS members(guild TEXT NOT NULL REFERENCES guilds(id) ON DELETE CASCADE,
@@ -48,8 +59,14 @@ export function database(path: string, backupDir?: string) {
       envelope TEXT NOT NULL, created INTEGER NOT NULL);
     CREATE INDEX IF NOT EXISTS events_room ON events(room,seq);
     CREATE INDEX IF NOT EXISTS sessions_expiry ON sessions(expires);`);
+      db.exec(COMMUNITY_SCHEMA);
+      db.exec(INVITATION_SCHEMA);
+      db.exec("CREATE INDEX IF NOT EXISTS guilds_owner ON guilds(owner)");
+      if (db.query("PRAGMA foreign_key_check").all().length)
+        throw Error("DBの参照整合性を確認できない");
       db.exec(`PRAGMA user_version=${SCHEMA_VERSION}`);
     })();
+    db.exec("PRAGMA foreign_keys=ON");
     return db;
   } catch (error) {
     db.close();
