@@ -1,4 +1,5 @@
 const paths = {
+  notebook: ["M5 3h16v20H5V3ZM2 7h6M2 12h6M2 17h6M11 8h6M11 12h6M11 16h4"],
   folder: ["M3 5h7l2 3h11v13H3V5Z"],
   book: ["M3 4h8l2 2 2-2h8v17h-8l-2 2-2-2H3V4ZM13 6v17"],
   megaphone: ["M3 10v6h5l12 5V5L8 10H3ZM8 16l2 7h4l-2-5M23 10v6"],

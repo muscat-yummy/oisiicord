@@ -48,6 +48,10 @@ export function createMentionInput({ input, getUsers, getGuild, avatar }) {
     selected = 0,
     range = null;
   function close() {
+    if (list.hidden) {
+      range = null;
+      return;
+    }
     list.hidden = true;
     input.setAttribute("aria-expanded", "false");
     input.removeAttribute("aria-activedescendant");
@@ -66,6 +70,7 @@ export function createMentionInput({ input, getUsers, getGuild, avatar }) {
     input.dispatchEvent(new Event("input", { bubbles: true }));
   }
   function highlight() {
+    input.setAttribute("aria-controls", list.id);
     [...list.children].forEach((el, i) =>
       el.setAttribute("aria-selected", String(i === selected)),
     );

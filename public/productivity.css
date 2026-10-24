@@ -1,0 +1,136 @@
+#modal:has(.personal-panel) {
+  width: min(640px, calc(100vw - 24px));
+}
+.personal-panel {
+  min-height: 330px;
+}
+.personal-tabs {
+  display: flex;
+  gap: 5px;
+  border-bottom: 1px solid var(--line);
+  padding-bottom: 12px;
+  margin-bottom: 18px;
+}
+.personal-tabs button {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  padding: 9px 14px;
+  font-size: 13px;
+  background: none;
+  color: var(--muted);
+}
+.personal-tabs button.selected {
+  background: color-mix(in srgb, var(--accent) 18%, transparent);
+  color: var(--text);
+}
+.personal-content {
+  display: grid;
+  gap: 14px;
+  max-height: 55dvh;
+  overflow: auto;
+  padding: 2px;
+}
+.personal-content > label {
+  display: grid;
+  gap: 8px;
+  margin: 0;
+  color: var(--muted);
+  font-size: 12px;
+}
+.personal-content textarea {
+  width: 100%;
+  resize: vertical;
+  min-height: 140px;
+  line-height: 1.7;
+  font-size: 14px;
+}
+.personal-content select {
+  font-size: 12px;
+}
+.personal-note-footer {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  color: var(--muted);
+  font-size: 11px;
+}
+.personal-empty {
+  padding: 44px 16px;
+  text-align: center;
+  color: var(--muted);
+}
+.personal-toolbar {
+  display: flex;
+  justify-content: flex-end;
+}
+.personal-toolbar button {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  font-size: 12px;
+}
+.personal-card {
+  min-width: 0;
+  padding: 16px;
+  border: 1px solid var(--line);
+  border-radius: 9px;
+  background: var(--panel);
+}
+.personal-card > strong {
+  font-size: 13px;
+  overflow-wrap: anywhere;
+}
+.personal-card > p {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  max-height: 100px;
+  overflow: auto;
+  line-height: 1.7;
+  margin: 10px 0 16px;
+}
+.personal-card-actions {
+  display: flex;
+  gap: 7px;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+}
+.personal-card-actions button {
+  font-size: 12px;
+  padding: 7px 11px;
+}
+.template-variables {
+  display: flex;
+  gap: 7px;
+  flex-wrap: wrap;
+}
+.template-variables button {
+  font:
+    12px ui-monospace,
+    monospace;
+  padding: 5px 9px;
+  color: var(--muted);
+  background: var(--panel);
+}
+.markup-candidates button > .ui-icon {
+  flex: none;
+  width: 28px;
+}
+@media (max-width: 780px) {
+  .personal-tabs button {
+    padding: 8px 10px;
+    gap: 5px;
+    font-size: 12px;
+  }
+  .personal-content {
+    max-height: 54dvh;
+  }
+  .personal-note-footer {
+    flex-wrap: wrap;
+  }
+  #personal-tools {
+    width: 30px;
+    min-width: 30px;
+    padding: 4px;
+  }
+}

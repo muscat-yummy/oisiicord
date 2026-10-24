@@ -10,6 +10,7 @@ import { createSettings } from "./settings.js";
 import { createCommunityUI } from "./community-ui.js";
 import * as M from "./membership.js";
 import { createWorkspaceUI } from "./workspace-ui.js";
+import { createProductivity } from "./productivity.js";
 import { rememberLogin, restoreLogin, forgetLogin } from "./login-state.js";
 import { isMentioned, shouldNotify, createMentionInput } from "./mentions.js";
 const $ = (s) => document.querySelector(s);
@@ -530,10 +531,12 @@ function stashDraft() {
       attachments: [...attachments],
       reply,
     });
+  if (roomId) productivity.saveDraft(roomId, $("#message-input").value, reply);
 }
 function restoreDraft() {
   const draft = drafts.get(roomId);
   mentionInput.close();
+  productivity.closeCandidates();
   $("#message-input").value = draft?.text ?? "";
   attachments = [...(draft?.attachments ?? [])];
   reply = draft?.reply ?? null;
@@ -1134,6 +1137,7 @@ async function sendMessage(e) {
     reply = null;
     attachments = [];
     drafts.delete(roomId);
+    guard(() => productivity.removeDraft(roomId));
     $("#reply-bar").hidden = true;
     renderAttachments();
     $("#messages").scrollTop = $("#messages").scrollHeight;
@@ -1669,6 +1673,7 @@ async function enterAccount(result, identity) {
     storage = { pins: {}, versions: {}, verified: {} };
   }
   await pinUser(result.user);
+  await productivity.load().catch((error) => toast(error.message));
   $("#password").value = "";
   await refresh();
   $("#auth").hidden = true;
@@ -1690,6 +1695,9 @@ if (loginChannel)
 async function logout(revoked = false) {
   if (sending && !revoked) throw Error("送信が完了してからログアウトして");
   const sessionId = me?.session;
+  stashDraft();
+  await productivity.flush().catch((error) => toast(error.message));
+  productivity.reset();
   await leaveVoice();
   clearTimeout(reconnectTimer);
   clearInterval(heartbeat);
@@ -2330,6 +2338,51 @@ $("#channel-list").addEventListener("contextmenu", (event) => {
     },
   ]);
 });
+const productivity = createProductivity({
+  node,
+  button,
+  modal,
+  guard,
+  toast,
+  input: $("#message-input"),
+  drafts,
+  getMe: () => me,
+  getUser: () => state.me,
+  getRoom: currentRoom,
+  getGuild: currentGuild,
+  rooms: () =>
+    state
+      ? [
+          ...state.guilds.flatMap((g) =>
+            g.channels.map((r) => ({ ...r, parent: g.name })),
+          ),
+          ...state.dms.map((r) => ({
+            ...r,
+            parent: "DM",
+            name:
+              users.get(r.users.find((id) => id !== me.id))?.display ?? "DM",
+          })),
+        ]
+      : [],
+  stashDraft,
+  openRoom: async (id) => {
+    const g = state.guilds.find((g) => g.channels.some((r) => r.id === id));
+    if (g) await selectGuild(g.id);
+    else {
+      stashDraft();
+      guildId = null;
+    }
+    await selectRoom(id);
+  },
+  clearComposer: () => {
+    $("#message-input").value = "";
+    reply = null;
+    attachments = [];
+    $("#reply-bar").hidden = true;
+    renderAttachments();
+  },
+});
+$("#personal-tools").onclick = () => guard(() => productivity.open());
 for (const [id, name, label] of [
   ["add-guild", "plus", "サーバー作成・招待から参加"],
   ["side-menu", "chevron", "サーバーメニュー"],
@@ -2337,6 +2390,7 @@ for (const [id, name, label] of [
   ["mobile-channels", "menu", "チャンネルを表示"],
   ["call", "phone", "音声通話"],
   ["pins", "pin", "ピン留め"],
+  ["personal-tools", "notebook", "メモ・定型文・下書き"],
   ["toggle-members", "users", "メンバー"],
   ["attach", "plusCircle", "ファイルを添付"],
   ["emoji", "smile", "絵文字"],
@@ -2583,7 +2637,7 @@ const mentionInput = createMentionInput({
   avatar,
 });
 $("#message-input").onkeydown = (e) => {
-  if (mentionInput.keydown(e)) return;
+  if (productivity.keydown(e) || mentionInput.keydown(e)) return;
   if (
     e.key === "Enter" &&
     !e.shiftKey &&
@@ -2597,6 +2651,7 @@ $("#message-input").onkeydown = (e) => {
 let lastTyping = 0;
 $("#message-input").oninput = (e) => {
   const input = e.target;
+  productivity.saveDraft(roomId, input.value, reply);
   input.style.height = "auto";
   input.style.height = Math.min(input.scrollHeight, 160) + "px";
   if (Date.now() - lastTyping > 3000 && roomId && ws?.readyState === 1) {
@@ -2619,6 +2674,9 @@ $("#emoji").onclick = () =>
       input.dispatchEvent(new Event("input", { bubbles: true }));
     },
   });
+$("#message-input").addEventListener("blur", () =>
+  guard(() => productivity.flush()),
+);
 $("#search").oninput = renderMessages;
 $("#pins").onclick = () => communityUI.pins({ anchor: $("#pins") });
 $("#toggle-members").onclick = () => {
