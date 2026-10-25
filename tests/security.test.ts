@@ -510,6 +510,43 @@ test("realtime socket authorization, presence, event delivery and logout", async
       b.messages.some((m) => m.type === "event" && m.room === roomId),
     );
     expect(attacker.messages.some((m) => m.type === "event")).toBe(false);
+    a.socket.send(JSON.stringify({ type: "join-voice", room: roomId }));
+    b.socket.send(JSON.stringify({ type: "join-voice", room: roomId }));
+    await until(() => b.messages.some((m) => m.type === "voice-peers"));
+    const signaling = await C.seal(
+      {
+        type: "signal",
+        to: bob.id,
+        description: { type: "offer", sdp: "local-test-sdp" },
+      },
+      {
+        room: roomId,
+        author: alice.id,
+        recipients: [member(alice), member(bob)],
+        identity: alice.identity,
+        version: 0,
+      },
+    );
+    a.socket.send(
+      JSON.stringify({ type: "signal", room: roomId, envelope: signaling }),
+    );
+    await until(() => b.messages.some((m) => m.type === "signal"));
+    const received = b.messages.find((m) => m.type === "signal");
+    expect(
+      (await C.open(received.envelope, bob.identity, alice.keys, roomId))
+        .description.sdp,
+    ).toBe("local-test-sdp");
+    expect(
+      (await request(alice, "/rooms/" + roomId + "/events", signaling)).status,
+    ).toBe(400);
+    a.socket.send(
+      JSON.stringify({ type: "signal", room: roomId, envelope: e }),
+    );
+    await until(() => a.messages.some((m) => m.type === "error"));
+    expect(
+      a.messages.filter((m) => m.type === "error").at(-1).message,
+    ).toContain("形式が不正");
+
     attacker.socket.send(JSON.stringify({ type: "typing", room: roomId }));
     await until(() => attacker.messages.some((m) => m.type === "error"));
     expect((await request(bob, "/auth/logout", {})).status).toBe(200);

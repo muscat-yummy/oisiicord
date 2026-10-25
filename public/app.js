@@ -113,8 +113,29 @@ async function api(path, body, method) {
     opts.headers["Content-Type"] = "application/json";
     opts.body = JSON.stringify(body);
   }
-  const res = await fetch("/api" + path, opts);
-  const out = await res.json();
+  if (opts.method === "GET") opts.signal = AbortSignal.timeout(30000);
+  let res;
+  try {
+    res = await fetch("/api" + path, opts);
+  } catch (error) {
+    throw Error(
+      !navigator.onLine
+        ? "オフライン"
+        : error.name === "TimeoutError"
+          ? "応答がない。再試行して"
+          : "サーバーに接続できない",
+    );
+  }
+  let out;
+  try {
+    out = await res.json();
+  } catch {
+    throw Error(
+      res.ok
+        ? "応答を読み取れない"
+        : "サーバーに接続できない (" + res.status + ")",
+    );
+  }
   if (!res.ok) {
     const error = Error(out.error ?? "リクエスト失敗");
     error.status = res.status;
@@ -609,7 +630,26 @@ function renderMembers() {
     panel.append(b);
   }
 }
+function renderHistoryStatus() {
+  const root = $("#history-status"),
+    room = currentRoom(),
+    cache = histories.get(roomId);
+  root.replaceChildren();
+  root.hidden = true;
+  if (!room || room.kind === "voice") return;
+  if (loading.has(roomId)) root.append("読み込み中…");
+  else if (cache?.error)
+    root.append(
+      "履歴を取得できない",
+      button("再試行", () => loadHistory(roomId)),
+    );
+  else if (cache?.more)
+    root.append(button("続きを読み込む", () => loadHistory(roomId)));
+  root.hidden = !root.childNodes.length;
+}
 async function loadHistory(id) {
+  const identity = me;
+  if (!identity) return;
   if (loading.has(id)) {
     reloadHistory.add(id);
     return loading.get(id);
@@ -622,8 +662,12 @@ async function loadHistory(id) {
       error: null,
     };
     histories.set(id, cache);
+    cache.error = null;
+    cache.more = false;
     for (let page = 0; page < 100; page++) {
       const batch = await api("/rooms/" + id + "/events?after=" + cache.cursor);
+      if (me !== identity) return;
+      cache.more = batch.length === 100;
       if (!batch.length) break;
       for (const event of batch) {
         cache.cursor = Math.max(cache.cursor, event.seq);
@@ -687,11 +731,21 @@ async function loadHistory(id) {
     if (roomId === id) renderMessages();
   })();
   loading.set(id, task);
+  if (roomId === id) renderHistoryStatus();
   try {
     await task;
+  } catch (error) {
+    if (me === identity && histories.has(id))
+      histories.get(id).error = error.message;
+    throw error;
   } finally {
-    loading.delete(id);
-    if (reloadHistory.delete(id) && me) await loadHistory(id);
+    if (loading.get(id) === task) {
+      loading.delete(id);
+      if (roomId === id) renderHistoryStatus();
+      const again = reloadHistory.delete(id);
+      if (again && me === identity && !histories.get(id)?.error)
+        await loadHistory(id);
+    }
   }
 }
 function projection() {
@@ -830,6 +884,7 @@ function renderChannelAccess() {
   }
 }
 function renderMessages() {
+  renderHistoryStatus();
   const area = $("#messages");
   const nearBottom =
     area.scrollHeight - area.scrollTop - area.clientHeight < 180;
@@ -1107,6 +1162,7 @@ async function sendMessage(e) {
   const input = $("#message-input"),
     text = input.value.trim();
   if (!text && !attachments.length) return;
+  if (!navigator.onLine) throw Error("オフライン");
   sending = true;
   $("#send").disabled = true;
   $("#attach").disabled = true;
@@ -1721,6 +1777,10 @@ async function logout(revoked = false) {
   mediaPreview.clear();
   clearDeveloperCaches();
   histories.clear();
+  loading.clear();
+  reloadHistory.clear();
+  $("#network-status").hidden = true;
+  $("#history-status").hidden = true;
   attachments = [];
   reply = null;
   $("#message-input").value = "";
@@ -1733,18 +1793,67 @@ async function logout(revoked = false) {
   $("#password").value = "";
   if (registering) $("#auth-switch").click();
 }
+function networkStatus(connected) {
+  const root = $("#network-status");
+  root.hidden = connected || !me;
+  if (connected && $("#toast").textContent === "オフライン")
+    $("#toast").hidden = true;
+  root.replaceChildren();
+  if (!root.hidden)
+    root.append(
+      navigator.onLine ? "再接続中…" : "オフライン",
+      button("再接続", reconnect),
+    );
+}
+function reconnect() {
+  clearTimeout(reconnectTimer);
+  clearInterval(heartbeat);
+  if (ws) {
+    ws.onclose = null;
+    ws.close();
+    ws = null;
+  }
+  if (me) connect();
+}
+window.addEventListener("online", reconnect);
+window.addEventListener("offline", () => {
+  networkStatus(false);
+  ws?.close();
+});
+document.addEventListener("visibilitychange", () => {
+  if (!document.hidden && me) {
+    if (ws?.readyState === 1) guard(refresh);
+    else reconnect();
+  }
+});
 function connect() {
-  if (!me) return;
-  ws = new WebSocket(location.origin.replace(/^http/, "ws") + "/ws");
+  if (!me || ws?.readyState === 0 || ws?.readyState === 1) return;
+  if (!navigator.onLine) {
+    networkStatus(false);
+    return;
+  }
+  const socket = new WebSocket(location.origin.replace(/^http/, "ws") + "/ws");
+  ws = socket;
+  let lastPong = Date.now();
   ws.onopen = () => {
+    if (ws !== socket) return;
+    networkStatus(true);
     $("#connection").textContent = "オンライン";
     refresh().catch((e) => toast(e.message));
     clearInterval(heartbeat);
     heartbeat = setInterval(() => {
-      if (ws?.readyState === 1) ws.send(JSON.stringify({ type: "ping" }));
+      if (ws !== socket) return;
+      if (Date.now() - lastPong > 75000) {
+        socket.close();
+        return;
+      }
+      if (socket.readyState === 1)
+        socket.send(JSON.stringify({ type: "ping" }));
     }, 30000);
   };
   ws.onclose = (event) => {
+    if (ws !== socket) return;
+    networkStatus(false);
     clearInterval(heartbeat);
     if (event.code === 4001) {
       guard(() => logout(true));
@@ -1756,7 +1865,9 @@ function connect() {
   };
   ws.onmessage = (e) =>
     guard(async () => {
+      if (ws !== socket || !me) return;
       const m = JSON.parse(e.data);
+      if (m.type === "pong") lastPong = Date.now();
       if (m.type === "state") await refresh();
       if (m.type === "presence" && state && users.has(m.user)) {
         state.online = state.online.filter((id) => id !== m.user);

@@ -592,3 +592,40 @@ button.mention:hover {
   margin-left: auto;
   color: var(--muted, #b5bac1);
 }
+
+.message-text.emoji-only > .rich-prose {
+  font-size: 1.5em;
+  line-height: 1.5;
+}
+.emoji-only .custom-emoji {
+  min-width: calc(var(--emoji-size, 22px) * 1.5);
+  height: calc(var(--emoji-size, 22px) * 1.5);
+}
+.emoji-only .custom-emoji img {
+  width: calc(var(--emoji-size, 22px) * 1.5);
+  height: calc(var(--emoji-size, 22px) * 1.5);
+}
+.network-status,
+.history-status {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-wrap: wrap;
+  gap: 12px;
+  padding: 8px 16px;
+  font-size: 12px;
+  border-bottom: 1px solid var(--line);
+  background: var(--panel);
+}
+.network-status {
+  color: var(--yellow, #f0c46a);
+}
+.network-status button,
+.history-status button {
+  padding: 5px 10px;
+  font-size: 12px;
+}
+.network-status[hidden],
+.history-status[hidden] {
+  display: none;
+}

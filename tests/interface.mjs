@@ -378,6 +378,9 @@ try {
             return true;
       return false;
     });
+    await page.waitForFunction(
+      () => document.querySelectorAll("#call-stage .call-tile").length === 2,
+    );
     await screenshot(page, "voice-call");
     await page.locator("#camera").click();
     await page.waitForFunction(() =>
@@ -603,6 +606,9 @@ try {
         .evaluate((el) => el.classList.contains("toggled")),
     );
     await page.locator("#mute").click();
+    await page.waitForFunction(
+      () => document.querySelectorAll("#call-stage .call-tile").length === 2,
+    );
     await screenshot(page, "voice-call");
     await page.locator("#camera").click();
     await page.waitForFunction(

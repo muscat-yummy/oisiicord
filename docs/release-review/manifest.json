@@ -1,0 +1,134 @@
+[
+  {
+    "sheet": "user-01.jpg",
+    "screens": [
+      "release-user-accessibility.png",
+      "release-user-account.png",
+      "release-user-appearance.png",
+      "release-user-keybinds.png",
+      "release-user-notifications.png",
+      "release-user-profile.png"
+    ]
+  },
+  {
+    "sheet": "user-02.jpg",
+    "screens": [
+      "release-user-sessions.png",
+      "release-user-voice.png"
+    ]
+  },
+  {
+    "sheet": "server-01.jpg",
+    "screens": [
+      "release-server-audit.png",
+      "release-server-categories.png",
+      "release-server-channels.png",
+      "release-server-emojis.png",
+      "release-server-general.png",
+      "release-server-info.png"
+    ]
+  },
+  {
+    "sheet": "server-02.jpg",
+    "screens": [
+      "release-server-invites.png",
+      "release-server-members.png",
+      "release-server-notifications.png",
+      "release-server-overview.png",
+      "release-server-roles.png",
+      "release-server-rules.png"
+    ]
+  },
+  {
+    "sheet": "recovery-01.jpg",
+    "screens": [
+      "release-emoji-desktop.png",
+      "release-emoji-mobile.png",
+      "release-history-continue.png",
+      "release-history-retry.png",
+      "release-login.png",
+      "release-offline.png"
+    ]
+  },
+  {
+    "sheet": "recovery-02.jpg",
+    "screens": [
+      "release-reconnected.png",
+      "release-registration.png"
+    ]
+  },
+  {
+    "sheet": "community-01.jpg",
+    "screens": [
+      "community-chat.png",
+      "community-dm-rainbow.png",
+      "community-emoji-large-custom.png",
+      "community-emoji-picker.png",
+      "community-mobile-chat.png",
+      "community-pins.png"
+    ]
+  },
+  {
+    "sheet": "community-02.jpg",
+    "screens": [
+      "community-url-confirmation.png"
+    ]
+  },
+  {
+    "sheet": "workspace-01.jpg",
+    "screens": [
+      "workspace-category-menu.png",
+      "workspace-channel-create.png",
+      "workspace-channel-editor.png",
+      "workspace-channel-menu.png",
+      "workspace-home.png",
+      "workspace-invite-link.png"
+    ]
+  },
+  {
+    "sheet": "workspace-02.jpg",
+    "screens": [
+      "workspace-mentions.png",
+      "workspace-mobile-home.png",
+      "workspace-profile.png",
+      "workspace-server-menu.png"
+    ]
+  },
+  {
+    "sheet": "developer-01.jpg",
+    "screens": [
+      "developer-audio.png",
+      "developer-code.png",
+      "developer-image-viewer.png",
+      "developer-media.png",
+      "developer-mermaid.png",
+      "developer-mobile-audio.png"
+    ]
+  },
+  {
+    "sheet": "developer-02.jpg",
+    "screens": [
+      "developer-mobile-media.png"
+    ]
+  },
+  {
+    "sheet": "other-01.jpg",
+    "screens": [
+      "mentions-chat.png",
+      "mentions-picker.png",
+      "voice-call.png",
+      "mobile-profile.png"
+    ]
+  },
+  {
+    "sheet": "tools-01.jpg",
+    "screens": [
+      "productivity-completion.png",
+      "productivity-delete-confirmation.png",
+      "productivity-mobile.png",
+      "productivity-notes.png",
+      "productivity-simplified-tools.png",
+      "productivity-templates.png"
+    ]
+  }
+]

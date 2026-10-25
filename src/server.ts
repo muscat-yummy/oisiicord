@@ -229,7 +229,12 @@ export function createApp(
       fail(400, "公開鍵が不正");
     }
   }
-  async function validateEnvelope(e: any, r: Row, uid: string) {
+  async function validateEnvelope(
+    e: any,
+    r: Row,
+    uid: string,
+    purpose: "event" | "signal" = "event",
+  ) {
     const h = e?.header;
     if (
       !h ||
@@ -237,8 +242,10 @@ export function createApp(
       h.room !== r.id ||
       h.author !== uid ||
       !idPattern.test(h.id) ||
-      (h.type !== undefined &&
-        !["message", "edit", "delete", "reaction", "pin"].includes(h.type)) ||
+      (purpose === "signal"
+        ? h.type !== "signal"
+        : h.type !== undefined &&
+          !["message", "edit", "delete", "reaction", "pin"].includes(h.type)) ||
       !Number.isSafeInteger(h.at) ||
       Math.abs(Date.now() - h.at) > 300000
     )
@@ -255,10 +262,13 @@ export function createApp(
     )
       fail(409, "宛先が現在のメンバーと一致しない");
     if (r.guild) {
-      const expected = invitations
-        .state(r.guild)
-        .activeInvites.map((i: any) => i.grant.id)
-        .sort();
+      const expected =
+        purpose === "signal"
+          ? []
+          : invitations
+              .state(r.guild)
+              .activeInvites.map((i: any) => i.grant.id)
+              .sort();
       if (
         canonical(Object.keys(e.historyBoxes ?? {}).sort()) !==
         canonical(expected)
@@ -271,10 +281,13 @@ export function createApp(
     // Signature verification yields; recheck authorization after it to close membership races.
     roomAccess(r.id, uid);
     if (r.guild) {
-      const expected = invitations
-        .state(r.guild)
-        .activeInvites.map((i: any) => i.grant.id)
-        .sort();
+      const expected =
+        purpose === "signal"
+          ? []
+          : invitations
+              .state(r.guild)
+              .activeInvites.map((i: any) => i.grant.id)
+              .sort();
       if (
         canonical(Object.keys(e.historyBoxes ?? {}).sort()) !==
         canonical(expected)
@@ -1271,6 +1284,7 @@ export function createApp(
           "/preferences.js": "preferences.js",
           "/settings.js": "settings.js",
           "/community-ui.js": "community-ui.js",
+          "/emoji-format.js": "emoji-format.js",
           "/membership.js": "membership.js",
           "/mentions.js": "mentions.js",
           "/login-state.js": "login-state.js",
@@ -1399,7 +1413,7 @@ export function createApp(
           if (m.type === "signal") {
             if (ws.data.voice !== r.id)
               fail(403, "音声チャンネルに参加していない");
-            await validateEnvelope(m.envelope, r, ws.data.user);
+            await validateEnvelope(m.envelope, r, ws.data.user, "signal");
             emitUsers(
               [...sockets]
                 .filter((s) => s.data.voice === r.id && s !== ws)

@@ -9,3 +9,7 @@ settings/icon.png
 settings/dm.mp3
 
 /settings/changelog.md
+
+/docs/release-review/screenshots/
+/docs/release-review/*.jpg
+/docs/release-review/gallery.html

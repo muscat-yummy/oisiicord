@@ -1,3 +1,4 @@
+import { emojiOnlyCount } from "./emoji-format.js";
 import { messageBlocks, inlineCode } from "./developer-format.js";
 import { createDeveloperUI } from "./developer-ui.js";
 import { mentions } from "./mentions.js";
@@ -259,6 +260,10 @@ export function createCommunityUI(ctx) {
   const developer = createDeveloperUI(ctx);
   function richText(text) {
     const root = n("div", { class: "message-text" });
+    root.classList.toggle(
+      "emoji-only",
+      emojiOnlyCount(text, customEmojis()) > 0,
+    );
     for (const block of messageBlocks(text)) {
       if (block.type === "code") {
         root.append(developer.codeBlock(block.text, block.language));
