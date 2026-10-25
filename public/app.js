@@ -815,7 +815,7 @@ function projection() {
       }
       if (p.type === "delete" && e.author === target.author) {
         target.deleted = true;
-        target.text = "メッセージを削除した";
+        target.text = "";
         target.files = [];
       }
       if (
@@ -830,7 +830,7 @@ function projection() {
       if (p.type === "pin" && typeof p.on === "boolean") target.pinned = p.on;
     }
   }
-  return [...messages.values()];
+  return [...messages.values()].filter((message) => !message.deleted);
 }
 function richText(s) {
   return communityUI.richText(s);
