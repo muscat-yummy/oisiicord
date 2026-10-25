@@ -181,6 +181,16 @@
   margin: auto;
   object-fit: contain;
 }
+.attachment-visual.audio {
+  min-height: 0;
+  padding: 14px 12px;
+}
+.attachment-visual audio {
+  width: 100%;
+  min-width: 0;
+  height: 40px;
+  color-scheme: dark;
+}
 .attachment-visual video {
   width: 100%;
   min-height: 180px;
@@ -249,23 +259,6 @@
 .image-viewer footer input {
   width: 180px;
   accent-color: var(--accent);
-}
-.personal-converter {
-  display: grid;
-  gap: 12px;
-}
-.personal-converter select {
-  font-size: 12px;
-}
-.personal-converter textarea {
-  font-family: ui-monospace, Consolas, monospace;
-  min-height: 110px;
-  font-size: 12px;
-}
-.personal-converter-actions {
-  display: flex;
-  justify-content: flex-end;
-  gap: 8px;
 }
 @media (max-width: 780px) {
   .code-action span {

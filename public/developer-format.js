@@ -81,32 +81,6 @@ export function codeRanges(text) {
           .map((s) => [b.start + s.start, b.start + s.end]),
   );
 }
-export async function transformText(value, operation) {
-  const text = String(value);
-  if (operation === "json") return JSON.stringify(JSON.parse(text), null, 2);
-  if (operation === "compact") return JSON.stringify(JSON.parse(text));
-  if (operation === "url-encode") return encodeURIComponent(text);
-  if (operation === "url-decode") return decodeURIComponent(text);
-  if (operation === "base64-encode") {
-    let binary = "";
-    for (const b of new TextEncoder().encode(text))
-      binary += String.fromCharCode(b);
-    return btoa(binary);
-  }
-  if (operation === "base64-decode")
-    return new TextDecoder("utf-8", { fatal: true }).decode(
-      Uint8Array.from(atob(text.trim()), (c) => c.charCodeAt(0)),
-    );
-  if (operation === "sha256")
-    return [
-      ...new Uint8Array(
-        await crypto.subtle.digest("SHA-256", new TextEncoder().encode(text)),
-      ),
-    ]
-      .map((b) => b.toString(16).padStart(2, "0"))
-      .join("");
-  throw Error("変換方法が不正");
-}
 export function validateMermaid(source) {
   if (source.length > 8000) throw Error("図は8000文字まで");
   if (/%%\s*\{|^\s*---(?:\s|$)/m.test(source))

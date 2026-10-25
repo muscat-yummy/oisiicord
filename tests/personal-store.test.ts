@@ -5,7 +5,7 @@ import {
   expandTemplate,
   buttonMarkup,
 } from "../public/personal-store.js";
-test("private notes, templates and drafts survive reload as authenticated ciphertext", async () => {
+test("private notes and templates survive reload as authenticated ciphertext", async () => {
   const raw = new Map<string, string>(),
     storage = {
       getItem: (k: string) => raw.get(k) ?? null,
@@ -30,18 +30,13 @@ test("private notes, templates and drafts survive reload as authenticated cipher
         text: "template secret",
       });
     }),
-    store.edit((d: any) => {
-      d.drafts.room = { text: "draft-secret", reply: null };
-    }),
   ]);
   const persisted = raw.get(store.key)!;
   expect(persisted).not.toContain("private-note-marker");
   expect(persisted).not.toContain("template secret");
-  expect(persisted).not.toContain("draft-secret");
   const restored = await createPersonalStore(identity, storage).load();
   expect(restored.notes.room).toBe("private-note-marker");
   expect(restored.templates.length).toBe(1);
-  expect(restored.drafts.room.text).toBe("draft-secret");
   const envelope = JSON.parse(persisted);
   envelope.payload.ct = envelope.payload.ct.slice(0, -4) + "AAAA";
   raw.set(store.key, JSON.stringify(envelope));
@@ -73,4 +68,52 @@ test("button insertion validates protocols, credentials, delimiters and labels",
   ])
     expect(() => buttonMarkup(raw)).toThrow();
   expect(() => buttonMarkup("https://example.com", "a>b")).toThrow();
+});
+
+test("existing personal data keeps notes and templates without restoring old drafts", async () => {
+  const keys = await C.identity();
+  const identity = {
+    ...(await C.importIdentity(keys.privateKeys, keys.keys)),
+    id: crypto.randomUUID(),
+  };
+  const envelope = await C.seal(
+    {
+      type: "personal-tools",
+      data: {
+        notes: { room: "keep" },
+        templates: [],
+        drafts: { room: { text: "old draft" } },
+      },
+    },
+    {
+      room: "oisiicord/local-tools/" + identity.id,
+      author: identity.id,
+      identity,
+      recipients: [identity],
+    },
+  );
+  let raw = JSON.stringify(envelope);
+  const store = createPersonalStore(identity, {
+    getItem: () => raw,
+    setItem: (_key, value) => {
+      raw = value;
+    },
+  });
+  expect(await store.load()).toEqual({
+    notes: { room: "keep" },
+    templates: [],
+  });
+  await store.edit((data: any) => {
+    data.notes.room = "updated";
+  });
+  expect(
+    (
+      await C.open(
+        JSON.parse(raw),
+        identity,
+        identity.keys,
+        "oisiicord/local-tools/" + identity.id,
+      )
+    ).data.drafts,
+  ).toBeUndefined();
 });

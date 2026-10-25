@@ -2,7 +2,6 @@ import { test, expect } from "bun:test";
 import {
   messageBlocks,
   inlineCode,
-  transformText,
   validateMermaid,
 } from "../public/developer-format.js";
 import { previewKind, validateMedia } from "../public/media-preview.js";
@@ -24,17 +23,6 @@ test("fenced code and inline code stay literal and do not create mentions", () =
   ).toThrow();
   expect(() => validateMermaid("---\nconfig:\n---\nflowchart LR")).toThrow();
 });
-test("developer transformations handle UTF-8, JSON, URL escapes and SHA-256", async () => {
-  const encoded = await transformText("日本語", "base64-encode");
-  expect(await transformText(encoded, "base64-decode")).toBe("日本語");
-  expect(await transformText('{"x":1}', "json")).toBe('{\n  "x": 1\n}');
-  expect(await transformText("a b", "url-encode")).toBe("a%20b");
-  expect(await transformText("a%20b", "url-decode")).toBe("a b");
-  expect(await transformText("abc", "sha256")).toBe(
-    "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad",
-  );
-  await expect(transformText("broken", "json")).rejects.toThrow();
-});
 test("media preview requires a supported signature and bounded image dimensions", () => {
   expect(previewKind({ mime: "image/svg+xml" })).toBeNull();
   expect(previewKind({ mime: "image/png" })).toBe("image");
@@ -52,4 +40,37 @@ test("media preview requires a supported signature and bounded image dimensions"
       "image/png",
     ),
   ).toThrow();
+});
+
+test("audio previews normalize MIME aliases and require matching container signatures", () => {
+  for (const mime of [
+    "audio/mpeg",
+    "audio/wav",
+    "audio/ogg",
+    "audio/mp4",
+    "audio/webm",
+    "audio/flac",
+    "audio/aac",
+    "audio/x-m4a",
+    "audio/mp3",
+  ])
+    expect(previewKind({ mime })).toBe("audio");
+  expect(previewKind({ name: "song.mp3", mime: "" })).toBe("audio");
+  expect(previewKind({ name: "song.mp3", mime: "text/html" })).toBeNull();
+  const fixtures = [
+    ["audio/mpeg", [255, 251, 144, 0]],
+    ["audio/mpeg", [73, 68, 51, 4, 0, 0, 0, 0, 0, 0]],
+    ["audio/wav", [...Buffer.from("RIFF"), 0, 0, 0, 0, ...Buffer.from("WAVE")]],
+    ["audio/ogg", [...Buffer.from("OggS"), ...new Array(23).fill(0)]],
+    ["audio/mp4", [0, 0, 0, 12, ...Buffer.from("ftypM4A ")]],
+    ["audio/webm", [26, 69, 223, 163]],
+    ["audio/flac", [...Buffer.from("fLaC"), 128, 0, 0, 34]],
+    ["audio/aac", [255, 241, 80, 128, 0, 255, 252]],
+  ] as const;
+  for (const [mime, bytes] of fixtures) {
+    expect(() => validateMedia(new Uint8Array(bytes), mime)).not.toThrow();
+    expect(() =>
+      validateMedia(new TextEncoder().encode("<html>not audio</html>"), mime),
+    ).toThrow();
+  }
 });

@@ -71,7 +71,7 @@ try {
   await page.locator("#modal-body input").fill("機能確認");
   await page.locator("#modal-submit").click();
   await page.locator("#room-name").filter({ hasText: "一般" }).waitFor();
-  if (!process.env.TEST_PRODUCTIVITY_FOCUS) {
+  {
     await page.locator("#message-input").fill("<");
     await page.getByRole("option", { name: /リンクボタン/ }).waitFor();
     await capture("completion");
@@ -162,19 +162,11 @@ try {
       .filter({ hasText: "作業部屋" })
       .click();
     await page.locator("#message-input").fill("private-draft-two");
-    await tools("下書き");
-    assert.equal(await page.locator(".personal-card").count(), 2);
-    await capture("drafts");
     await page
-      .locator(".personal-card")
-      .filter({ hasText: "private-draft-one" })
-      .getByRole("button", { name: "開く", exact: true })
+      .locator("#channel-list .channel")
+      .filter({ hasText: "一般" })
       .click();
-    await page.locator("#room-name").filter({ hasText: "一般" }).waitFor();
-    assert.equal(
-      await page.locator("#message-input").inputValue(),
-      "private-draft-one",
-    );
+    assert.equal(await page.locator("#message-input").inputValue(), "");
     await tools("メモ");
     assert.match(
       await page.getByLabel("自分用メモ", { exact: true }).inputValue(),
@@ -203,10 +195,7 @@ try {
       .getByRole("button", { name: "機能確認", exact: true })
       .click();
     await page.locator("#room-name").filter({ hasText: "一般" }).waitFor();
-    assert.equal(
-      await page.locator("#message-input").inputValue(),
-      "private-draft-one",
-    );
+    assert.equal(await page.locator("#message-input").inputValue(), "");
     await tools("メモ");
     assert.match(
       await page.getByLabel("自分用メモ", { exact: true }).inputValue(),
@@ -229,41 +218,72 @@ try {
       false,
     );
     await page.locator("#message-input").press("Escape");
-  } else {
-    await page.locator("#message-input").fill("private-draft-two");
   }
-  await tools("下書き");
-  await page
-    .locator(".personal-card")
-    .filter({ hasText: "private-draft-two" })
-    .getByRole("button", { name: "削除", exact: true })
-    .click();
-  await page
-    .locator(".personal-card")
-    .filter({ hasText: "private-draft-two" })
-    .waitFor({ state: "detached" });
+  await page.setViewportSize({ width: 1440, height: 960 });
+  await tools("メモ");
+  assert.deepEqual(await page.getByRole("tab").allTextContents(), [
+    "メモ",
+    "定型文",
+  ]);
+  assert(
+    !/自分専用・このブラウザのみ|下書きはない|定型文はまだない/.test(
+      await page.locator(".personal-panel").textContent(),
+    ),
+  );
   await close();
-  if (process.env.TEST_PRODUCTIVITY_FOCUS) {
-    await page.reload();
-    await page.locator("#workspace").waitFor({ state: "visible" });
-    await page
-      .locator("#guild-list")
-      .getByRole("button", { name: "機能確認", exact: true })
-      .click();
-    assert.equal(await page.locator("#message-input").inputValue(), "");
-  }
+  await page.locator("#message-input").fill("<");
+  assert.deepEqual(
+    await page.locator("#markup-candidates strong").allTextContents(),
+    ["リンクボタン", "コードブロック", "今日の連絡"],
+  );
+  await page.locator("#message-input").fill("削除確認のテスト");
+  await page.locator("#send").click();
+  const message = page
+    .locator(".message")
+    .filter({ hasText: "削除確認のテスト" });
+  await message.waitFor();
+  await message.hover();
+  await message
+    .getByRole("button", { name: "メッセージを削除", exact: true })
+    .click();
+  assert.equal(
+    await page.locator("#modal-body").textContent(),
+    "このメッセージを削除しますか？",
+  );
+  await close();
+  assert.equal(await message.count(), 1);
+  await message.hover();
+  await message
+    .getByRole("button", { name: "メッセージを削除", exact: true })
+    .click({ modifiers: ["Shift"] });
+  await message.waitFor({ state: "detached" });
+  assert.equal(await page.locator("#modal").isVisible(), false);
+  await page.locator("#message-input").fill("通常の削除確認");
+  await page.locator("#send").click();
+  const normal = page.locator(".message").filter({ hasText: "通常の削除確認" });
+  await normal.hover();
+  await normal
+    .getByRole("button", { name: "メッセージを削除", exact: true })
+    .click();
+  await capture("delete-confirmation");
+  await page.locator("#modal-submit").click();
+  await normal.waitFor({ state: "detached" });
+  await tools("定型文");
+  await capture("simplified-tools");
+  await close();
   assert.deepEqual(errors, []);
   console.log(
     JSON.stringify({
       passed: true,
       mode: process.env.TEST_PRODUCTIVITY_FOCUS ?? "all",
-      draftDeletion: true,
+      shiftDelete: true,
+      confirmation: true,
+      draftsRemoved: true,
       lessThanCompletion: true,
       selectionDoesNotSend: true,
       urlConfirmation: true,
       notes: true,
       templatesWithVariables: true,
-      persistentDrafts: true,
       noPlaintextEgress: true,
       mobile: true,
       mentionCoexistence: true,

@@ -2,7 +2,6 @@ import * as C from "./crypto.js";
 export const emptyPersonalData = () => ({
   notes: {},
   templates: [],
-  drafts: {},
 });
 export function expandTemplate(text, context, now = new Date()) {
   const values = {
@@ -72,12 +71,10 @@ export function createPersonalStore(
       !payload.data ||
       !Array.isArray(payload.data.templates) ||
       !payload.data.notes ||
-      !payload.data.drafts ||
-      typeof payload.data.notes !== "object" ||
-      typeof payload.data.drafts !== "object"
+      typeof payload.data.notes !== "object"
     )
       throw Error("自分用データを開けない");
-    return payload.data;
+    return { notes: payload.data.notes, templates: payload.data.templates };
   }
   return {
     key,

@@ -1,4 +1,3 @@
-import { transformText } from "./developer-format.js";
 import { icon } from "./icons.js";
 import {
   createPersonalStore,
@@ -14,7 +13,6 @@ export function createProductivity(ctx) {
     generation = 0,
     timer = null,
     notes = new Map(),
-    drafts = new Map(),
     panel = null,
     activeTab = "notes";
   const status = n("span", {
@@ -30,70 +28,34 @@ export function createProductivity(ctx) {
     clearTimeout(timer);
     timer = null;
     if (!store) return;
-    const pendingNotes = new Map(notes),
-      pendingDrafts = new Map(drafts);
+    const pendingNotes = new Map(notes);
     notes.clear();
-    drafts.clear();
     const mine = store,
       epoch = generation;
-    if (pendingNotes.size || pendingDrafts.size) {
+    if (pendingNotes.size) {
       try {
         const result = await mine.edit((value) => {
           for (const [id, text] of pendingNotes)
             text ? (value.notes[id] = text) : delete value.notes[id];
-          for (const [id, draft] of pendingDrafts)
-            draft.text || draft.reply
-              ? (value.drafts[id] = draft)
-              : delete value.drafts[id];
         });
         if (epoch === generation) data = result;
       } catch (error) {
         if (epoch === generation) {
           for (const [id, v] of pendingNotes)
             if (!notes.has(id)) notes.set(id, v);
-          for (const [id, v] of pendingDrafts)
-            if (!drafts.has(id)) drafts.set(id, v);
           status.textContent = "保存できない";
         }
         throw error;
       }
     }
     await mine.flush();
-    if (epoch === generation && !notes.size && !drafts.size)
-      status.textContent = "保存済み";
+    if (epoch === generation && !notes.size) status.textContent = "保存済み";
   }
   async function load() {
     generation++;
     store = createPersonalStore(ctx.getMe());
     data = await store.load();
     notes.clear();
-    drafts.clear();
-    hydrate();
-  }
-  function hydrate() {
-    for (const [id, value] of Object.entries(data.drafts))
-      if (!ctx.drafts.has(id))
-        ctx.drafts.set(id, {
-          text: value.text,
-          reply: value.reply ?? null,
-          attachments: [],
-        });
-  }
-  function saveDraft(id, text, reply) {
-    if (!store || !id) return;
-    const previous = drafts.get(id) ?? data.drafts[id];
-    if (
-      (previous?.text ?? "") === text &&
-      (previous?.reply ?? null) === (reply ?? null)
-    )
-      return;
-    drafts.set(id, { text, reply: reply ?? null, updated: Date.now() });
-    changed();
-  }
-
-  async function removeDraft(id) {
-    saveDraft(id, "", null);
-    await flush();
   }
   function reset() {
     generation++;
@@ -101,7 +63,6 @@ export function createProductivity(ctx) {
     store = null;
     data = emptyPersonalData();
     notes.clear();
-    drafts.clear();
     closeCandidates();
     panel = null;
   }
@@ -132,11 +93,9 @@ export function createProductivity(ctx) {
     });
   }
   async function open(tab) {
-    ctx.stashDraft();
     await flush();
     if (!store) throw Error("自分用データを開けない");
     data = await store.load();
-    hydrate();
     activeTab = tab ?? (ctx.getRoom() ? "notes" : "templates");
     panel = n("div", { class: "personal-panel" });
     modal("自分用ツール", panel);
@@ -152,8 +111,6 @@ export function createProductivity(ctx) {
     for (const [id, label, glyph] of [
       ["notes", "メモ", "notebook"],
       ["templates", "定型文", "copy"],
-      ["drafts", "下書き", "edit"],
-      ["convert", "変換", "code"],
     ]) {
       const tab = b(
         "",
@@ -172,8 +129,6 @@ export function createProductivity(ctx) {
     panel.replaceChildren(tabs, body);
     if (activeTab === "notes") renderNotes(body);
     if (activeTab === "templates") renderTemplates(body);
-    if (activeTab === "drafts") renderDrafts(body);
-    if (activeTab === "convert") renderConverter(body);
   }
   function renderNotes(body) {
     const available = rooms();
@@ -195,12 +150,7 @@ export function createProductivity(ctx) {
       "aria-label": "自分用メモ",
       placeholder: "メモを書く",
     });
-    const foot = n(
-      "div",
-      { class: "personal-note-footer" },
-      n("span", {}, "自分専用・このブラウザのみ"),
-      status,
-    );
+    const foot = n("div", { class: "personal-note-footer" }, status);
     function show() {
       text.value = notes.get(select.value) ?? data.notes[select.value] ?? "";
       status.textContent = "保存済み";
@@ -218,10 +168,6 @@ export function createProductivity(ctx) {
     const add = b("", () => templateEditor(body), "primary");
     add.append(icon("plus", 16), "定型文を作成");
     body.append(n("div", { class: "personal-toolbar" }, add));
-    if (!data.templates.length) {
-      body.append(n("p", { class: "personal-empty" }, "定型文はまだない"));
-      return;
-    }
     for (const template of data.templates) {
       const card = n(
         "article",
@@ -336,118 +282,6 @@ export function createProductivity(ctx) {
     );
     name.focus();
   }
-  function renderConverter(body) {
-    const type = n(
-      "select",
-      { "aria-label": "変換方法" },
-      ...[
-        ["json", "JSON整形"],
-        ["compact", "JSON圧縮"],
-        ["base64-encode", "Base64エンコード"],
-        ["base64-decode", "Base64デコード"],
-        ["url-encode", "URLエンコード"],
-        ["url-decode", "URLデコード"],
-        ["sha256", "SHA-256"],
-      ].map(([value, label]) => n("option", { value }, label)),
-    );
-    const source = n("textarea", {
-        rows: 5,
-        maxlength: 100000,
-        "aria-label": "変換するテキスト",
-        placeholder: "入力",
-      }),
-      result = n("textarea", {
-        rows: 5,
-        readonly: true,
-        "aria-label": "変換結果",
-        placeholder: "結果",
-      }),
-      error = n("p", { class: "error", "aria-live": "polite" });
-    body.append(
-      n(
-        "div",
-        { class: "personal-converter" },
-        type,
-        source,
-        n(
-          "div",
-          { class: "personal-converter-actions" },
-          b(
-            "変換",
-            async () => {
-              try {
-                result.value = await transformText(source.value, type.value);
-                error.textContent = "";
-              } catch {
-                error.textContent = "入力の形式を確認して";
-              }
-            },
-            "primary",
-          ),
-        ),
-        error,
-        result,
-        n(
-          "div",
-          { class: "personal-converter-actions" },
-          b("結果をコピー", async () => {
-            await navigator.clipboard.writeText(result.value);
-            toast("コピーした");
-          }),
-        ),
-      ),
-    );
-  }
-  function renderDrafts(body) {
-    const available = rooms(),
-      items = [...ctx.drafts.entries()].filter(
-        ([id, value]) =>
-          available.some((r) => r.id === id) &&
-          (value.text || value.attachments?.length || value.reply),
-      );
-    if (!items.length) {
-      body.append(n("p", { class: "personal-empty" }, "下書きはない"));
-      return;
-    }
-    for (const [id, draft] of items) {
-      const room = available.find((r) => r.id === id),
-        card = n(
-          "article",
-          { class: "personal-card" },
-          n("strong", {}, roomLabel(room)),
-          n("p", {}, draft.text || "添付 " + draft.attachments.length + "件"),
-        );
-      card.append(
-        n(
-          "div",
-          { class: "personal-card-actions" },
-          b(
-            "開く",
-            async () => {
-              document.querySelector("#modal").close();
-              await ctx.openRoom(id);
-            },
-            "primary",
-          ),
-          b("コピー", async () => {
-            await navigator.clipboard.writeText(draft.text ?? "");
-            toast("コピーした");
-          }),
-          b(
-            "削除",
-            async () => {
-              ctx.drafts.delete(id);
-              await removeDraft(id);
-              if (ctx.getRoom()?.id === id) ctx.clearComposer();
-              render();
-            },
-            "danger",
-          ),
-        ),
-      );
-      body.append(card);
-    }
-  }
   // Completion for supported markup and private templates.
   const candidates = n("div", {
     id: "markup-candidates",
@@ -497,27 +331,12 @@ export function createProductivity(ctx) {
         kind: "button",
       },
       {
-        name: "Mermaid図",
-        detail: "図のコードを挿入",
-        search: "mermaid 図",
-        glyph: "diagram",
-        kind: "mermaid",
-      },
-      {
         name: "コードブロック",
         detail: "言語を指定して挿入",
         search: "code コード",
         glyph: "code",
         kind: "code",
       },
-      ...(ctx.getGuild()?.emojis ?? []).map((e) => ({
-        name: ":" + e.name + ":",
-        detail: "カスタム絵文字",
-        search: ":" + e.name,
-        kind: "emoji",
-        glyph: "smile",
-        token: "<:" + e.id + ":>",
-      })),
       ...data.templates.map((t) => ({
         name: t.name,
         detail: "定型文",
@@ -565,7 +384,7 @@ export function createProductivity(ctx) {
       at = range;
     if (!option || !at) return;
     closeCandidates();
-    if (option.kind === "code" || option.kind === "mermaid") {
+    if (option.kind === "code") {
       const language = n(
         "select",
         { "aria-label": "コードの言語" },
@@ -582,11 +401,11 @@ export function createProductivity(ctx) {
           "mermaid",
         ].map((value) => n("option", { value }, value)),
       );
-      language.value = option.kind === "mermaid" ? "mermaid" : "js";
+      language.value = "js";
       const source = n(
         "textarea",
         { rows: 8, maxlength: 7800, "aria-label": "コードの本文" },
-        option.kind === "mermaid" ? "flowchart LR\n  A --> B" : "",
+        "",
       );
       modal(
         "コードを挿入",
@@ -627,11 +446,7 @@ export function createProductivity(ctx) {
         },
         "挿入",
       );
-    } else
-      insert(
-        option.kind === "emoji" ? option.token : expanded(option.template),
-        at,
-      );
+    } else insert(expanded(option.template), at);
   }
   input.addEventListener("input", (e) => {
     if (!e.isComposing) updateCandidates();
@@ -650,8 +465,6 @@ export function createProductivity(ctx) {
     load,
     reset,
     open,
-    saveDraft,
-    removeDraft,
     flush,
     closeCandidates,
     keydown(e) {

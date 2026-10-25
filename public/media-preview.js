@@ -1,9 +1,39 @@
 import * as C from "./crypto.js";
 import { icon } from "./icons.js";
-export function previewKind(file) {
+export function mediaMime(file) {
   const mime = String(file?.mime ?? "")
     .toLowerCase()
-    .split(";")[0];
+    .split(";")[0]
+    .trim();
+  const aliases = {
+    "audio/mp3": "audio/mpeg",
+    "audio/x-wav": "audio/wav",
+    "audio/wave": "audio/wav",
+    "audio/x-flac": "audio/flac",
+    "audio/x-m4a": "audio/mp4",
+  };
+  if (!mime || mime === "application/octet-stream") {
+    const extension = String(file?.name ?? "")
+      .split(".")
+      .at(-1)
+      .toLowerCase();
+    return (
+      {
+        mp3: "audio/mpeg",
+        wav: "audio/wav",
+        ogg: "audio/ogg",
+        oga: "audio/ogg",
+        opus: "audio/ogg",
+        m4a: "audio/mp4",
+        flac: "audio/flac",
+        aac: "audio/aac",
+      }[extension] ?? mime
+    );
+  }
+  return aliases[mime] ?? mime;
+}
+export function previewKind(file) {
+  const mime = mediaMime(file);
   return [
     "image/png",
     "image/jpeg",
@@ -14,7 +44,17 @@ export function previewKind(file) {
     ? "image"
     : ["video/mp4", "video/webm", "video/ogg"].includes(mime)
       ? "video"
-      : null;
+      : [
+            "audio/mpeg",
+            "audio/wav",
+            "audio/ogg",
+            "audio/mp4",
+            "audio/webm",
+            "audio/flac",
+            "audio/aac",
+          ].includes(mime)
+        ? "audio"
+        : null;
 }
 export function validateMedia(bytes, mime) {
   const a = new Uint8Array(bytes),
@@ -79,15 +119,53 @@ export function validateMedia(bytes, mime) {
       width = (bits & 16383) + 1;
       height = ((bits >>> 14) & 16383) + 1;
     }
-  } else if (mime === "video/mp4" && a.length >= 12 && ascii(4, 8) === "ftyp")
+  } else if (
+    ["video/mp4", "audio/mp4"].includes(mime) &&
+    a.length >= 12 &&
+    ascii(4, 8) === "ftyp"
+  )
     return;
   else if (
-    mime === "video/webm" &&
+    ["video/webm", "audio/webm"].includes(mime) &&
     a.length >= 4 &&
     view.getUint32(0) === 0x1a45dfa3
   )
     return;
-  else if (mime === "video/ogg" && ascii(0, 4) === "OggS") return;
+  else if (
+    ["video/ogg", "audio/ogg"].includes(mime) &&
+    a.length >= 27 &&
+    ascii(0, 4) === "OggS"
+  )
+    return;
+  else if (
+    mime === "audio/wav" &&
+    a.length >= 12 &&
+    ascii(0, 4) === "RIFF" &&
+    ascii(8, 12) === "WAVE"
+  )
+    return;
+  else if (mime === "audio/flac" && a.length >= 8 && ascii(0, 4) === "fLaC")
+    return;
+  else if (
+    mime === "audio/mpeg" &&
+    a.length >= 4 &&
+    ((a.length >= 10 && ascii(0, 3) === "ID3" && [2, 3, 4].includes(a[3])) ||
+      (a[0] === 255 &&
+        (a[1] & 224) === 224 &&
+        (a[1] & 24) !== 8 &&
+        (a[1] & 6) !== 0 &&
+        (a[2] & 240) !== 0 &&
+        (a[2] & 240) !== 240 &&
+        (a[2] & 12) !== 12))
+  )
+    return;
+  else if (
+    mime === "audio/aac" &&
+    a.length >= 7 &&
+    a[0] === 255 &&
+    (a[1] & 246) === 240
+  )
+    return;
   else throw Error("プレビューに対応していないファイル");
   if (
     !width ||
@@ -111,7 +189,9 @@ export function createMediaPreview(ctx) {
     [...entry.nodes].some(
       (root) =>
         states.get(root)?.visible ||
-        root.querySelector("video")?.paused === false,
+        [...root.querySelectorAll("video,audio")].some(
+          (media) => !media.paused,
+        ),
     ) || entry.viewers;
   function evict(key, entry) {
     entry.controller.abort();
@@ -169,10 +249,12 @@ export function createMediaPreview(ctx) {
         const plain = await C.decryptFile(encrypted, f);
         if (plain.byteLength !== f.size)
           throw Error("添付のサイズが一致しない");
-        validateMedia(plain, String(f.mime).toLowerCase().split(";")[0]);
+        validateMedia(plain, mediaMime(f));
         if (cache.get(state.key) !== entry)
           throw new DOMException("Canceled", "AbortError");
-        entry.url = URL.createObjectURL(new Blob([plain], { type: f.mime }));
+        entry.url = URL.createObjectURL(
+          new Blob([plain], { type: mediaMime(f) }),
+        );
         return entry.url;
       })().catch((error) => {
         if (cache.get(state.key) === entry) cache.delete(state.key);
@@ -188,7 +270,16 @@ export function createMediaPreview(ctx) {
       () => loadPreview(state),
       "preview-load",
     );
-    load.prepend(icon(state.kind === "video" ? "camera" : "image", 24));
+    load.prepend(
+      icon(
+        state.kind === "audio"
+          ? "headphones"
+          : state.kind === "video"
+            ? "camera"
+            : "image",
+        24,
+      ),
+    );
     state.visual.replaceChildren(load);
   }
   async function loadPreview(state) {
@@ -210,7 +301,7 @@ export function createMediaPreview(ctx) {
       const { url } = await acquire(state);
       if (!state.root.isConnected) return;
       const media = n(
-        state.kind === "image" ? "img" : "video",
+        state.kind === "image" ? "img" : state.kind,
         state.kind === "image"
           ? { src: url, alt: String(state.file.name), decoding: "async" }
           : {
@@ -328,7 +419,14 @@ export function createMediaPreview(ctx) {
       info = n(
         "div",
         { class: "file-card" },
-        icon(kind === "video" ? "camera" : "image", 22),
+        icon(
+          kind === "audio"
+            ? "headphones"
+            : kind === "video"
+              ? "camera"
+              : "image",
+          22,
+        ),
         n(
           "div",
           {},

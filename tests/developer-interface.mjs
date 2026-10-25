@@ -4,6 +4,7 @@ import { mkdtempSync, mkdirSync, rmSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { resolve } from "node:path";
 import assert from "node:assert/strict";
+import { execFileSync } from "node:child_process";
 const temp = mkdtempSync(resolve(tmpdir(), "oisiicord-developer-")),
   shots = resolve(import.meta.dir, "../docs/screenshots");
 mkdirSync(shots, { recursive: true });
@@ -26,6 +27,7 @@ const page = await browser.newPage({ viewport: { width: 1440, height: 960 } }),
   downloads = new Map();
 let tamper = false,
   phase = "setup";
+const previewUrls = [];
 page.setDefaultTimeout(30000);
 page.on("pageerror", (e) => errors.push(e.message));
 page.on("console", (m) => {
@@ -115,18 +117,6 @@ try {
     await page.locator(".code-block .hljs-keyword").first().waitFor();
     assert.equal(await page.locator(".inline-code .mention").count(), 0);
     await capture("code");
-    await page.locator("#personal-tools").click();
-    await page.getByRole("tab", { name: "変換", exact: true }).click();
-    await page.getByLabel("変換方法", { exact: true }).selectOption("sha256");
-    await page.getByLabel("変換するテキスト", { exact: true }).fill("abc");
-    await page.getByRole("button", { name: "変換", exact: true }).click();
-    await page.waitForFunction(() =>
-      document
-        .querySelector('[aria-label="変換結果"]')
-        .value.startsWith("ba7816bf"),
-    );
-    await capture("converter");
-    await page.locator("#modal-close").click();
   }
   if (
     !process.env.TEST_DEVELOPER_FOCUS ||
@@ -183,17 +173,10 @@ try {
         .isVisible(),
       true,
     );
-    await page.locator("#message-input").fill("<mermaid");
-    await page.getByRole("option").filter({ hasText: "Mermaid図" }).waitFor();
-    await page.locator("#message-input").press("Enter");
+    await page.locator("#message-input").fill("<");
     assert.equal(
-      await page.getByLabel("コードの言語", { exact: true }).inputValue(),
-      "mermaid",
-    );
-    await page.locator("#modal-submit").click();
-    assert.match(
-      await page.locator("#message-input").inputValue(),
-      /^```mermaid/,
+      await page.getByRole("option").filter({ hasText: "Mermaid図" }).count(),
+      0,
     );
     await page.locator("#message-input").fill("");
   }
@@ -308,10 +291,107 @@ try {
         .count(),
       0,
     );
+    previewUrls.push(...urls);
+  }
+  if (
+    !process.env.TEST_DEVELOPER_FOCUS ||
+    process.env.TEST_DEVELOPER_FOCUS === "audio"
+  ) {
+    phase = "audio";
+    const urls = [];
+    let audioCount = 0;
+    for (const [extension, mime, codec] of [
+      ["mp3", "audio/mpeg", "libmp3lame"],
+      ["wav", "audio/x-wav", "pcm_s16le"],
+    ]) {
+      const bytes = execFileSync("ffmpeg", [
+        "-hide_banner",
+        "-loglevel",
+        "error",
+        "-f",
+        "lavfi",
+        "-i",
+        "sine=frequency=440:duration=3",
+        "-c:a",
+        codec,
+        "-f",
+        extension,
+        "pipe:1",
+      ]);
+      await page.locator("#file-input").setInputFiles({
+        name: "preview." + extension,
+        mimeType: mime,
+        buffer: bytes,
+      });
+      await send("音楽プレビュー " + extension);
+      await page.waitForFunction(
+        (count) =>
+          document.querySelectorAll(".attachment-visual audio").length ===
+          count,
+        ++audioCount,
+      );
+      const audio = page.locator(".attachment-visual audio").last();
+      await audio.waitFor();
+      await audio.evaluate(async (media) => {
+        media.muted = true;
+        await media.play();
+      });
+      await page.waitForFunction(
+        () =>
+          [...document.querySelectorAll(".attachment-visual audio")].at(-1)
+            .currentTime > 0,
+      );
+      assert.equal(await audio.getAttribute("autoplay"), null);
+      urls.push(await audio.getAttribute("src"));
+      await audio.evaluate((media) => media.pause());
+    }
+    await capture("audio");
+    await page.setViewportSize({ width: 390, height: 844 });
+    await page.locator(".attachment-media").last().scrollIntoViewIfNeeded();
+    await capture("mobile-audio");
+    assert.equal(
+      await page.evaluate(
+        () => document.documentElement.scrollWidth > innerWidth,
+      ),
+      false,
+    );
+    assert([...downloads.values()].every((count) => count === 1));
+    tamper = true;
+    const bytes = execFileSync("ffmpeg", [
+      "-hide_banner",
+      "-loglevel",
+      "error",
+      "-f",
+      "lavfi",
+      "-i",
+      "sine=frequency=440:duration=1",
+      "-f",
+      "mp3",
+      "pipe:1",
+    ]);
+    await page.locator("#file-input").setInputFiles({
+      name: "damaged.mp3",
+      mimeType: "audio/mpeg",
+      buffer: bytes,
+    });
+    await send("改変された音楽");
+    await page
+      .locator(".attachment-media")
+      .last()
+      .locator(".preview-error")
+      .waitFor();
+    assert.equal(
+      await page.locator(".attachment-media").last().locator("audio").count(),
+      0,
+    );
+    await page.setViewportSize({ width: 1440, height: 960 });
+    previewUrls.push(...urls);
+  }
+  if (previewUrls.length) {
     await page.locator("#profile-settings").click();
     await page.getByRole("button", { name: "ログアウト", exact: true }).click();
     await page.locator("#auth").waitFor({ state: "visible" });
-    assert.equal(
+    assert(
       await page.evaluate(
         async (urls) =>
           (
@@ -324,9 +404,8 @@ try {
               ),
             )
           ).every(Boolean),
-        urls,
+        previewUrls,
       ),
-      true,
     );
   }
   assert.deepEqual(errors, []);
@@ -338,8 +417,7 @@ try {
       code: true,
       isolatedMermaid: true,
       svgExport: true,
-      converter: true,
-      encryptedImageVideo: true,
+      encryptedMedia: true,
       tamperRejected: true,
       blobCleanup: true,
     }),

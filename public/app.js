@@ -525,23 +525,13 @@ function renderNav() {
   $("#stage-controls").hidden = !(activeVoice && r?.id === activeVoice);
   renderChannelAccess();
 }
-const drafts = new Map();
-function stashDraft() {
-  if (roomId)
-    drafts.set(roomId, {
-      text: $("#message-input").value,
-      attachments: [...attachments],
-      reply,
-    });
-  if (roomId) productivity.saveDraft(roomId, $("#message-input").value, reply);
-}
-function restoreDraft() {
-  const draft = drafts.get(roomId);
+function clearComposer() {
   mentionInput.close();
   productivity.closeCandidates();
-  $("#message-input").value = draft?.text ?? "";
-  attachments = [...(draft?.attachments ?? [])];
-  reply = draft?.reply ?? null;
+  $("#message-input").value = "";
+  $("#message-input").style.height = "";
+  attachments = [];
+  reply = null;
   $("#reply-bar").hidden = true;
   renderAttachments();
 }
@@ -556,12 +546,11 @@ function defaultRoom(g) {
 }
 async function selectGuild(id) {
   if (sending) throw Error("送信が完了してからチャンネルを変更して");
-  stashDraft();
   guildId = id;
   roomId = defaultRoom(currentGuild());
   reply = null;
   $("#search").value = "";
-  restoreDraft();
+  clearComposer();
   renderNav();
   renderMembers();
   if (roomId) await loadHistory(roomId);
@@ -569,13 +558,12 @@ async function selectGuild(id) {
 }
 async function selectRoom(id) {
   if (sending) throw Error("送信が完了してからチャンネルを変更して");
-  stashDraft();
   roomId = id;
   reply = null;
   $("#reply-bar").hidden = true;
   $("#search").value = "";
   unread.delete(id);
-  restoreDraft();
+  clearComposer();
   $("#workspace").classList.remove("show-sidebar");
   renderNav();
   renderMembers();
@@ -1006,7 +994,9 @@ function renderMessages() {
       if (m.author === me.id)
         actions.append(
           iconButton("edit", "メッセージを編集", () => editMessage(m)),
-          iconButton("trash", "メッセージを削除", () => deleteMessage(m)),
+          iconButton("trash", "メッセージを削除", (e) =>
+            deleteMessage(m, e.shiftKey),
+          ),
         );
       row.append(actions);
       const reactions = node("div", { class: "reactions" });
@@ -1143,8 +1133,6 @@ async function sendMessage(e) {
     input.style.height = "";
     reply = null;
     attachments = [];
-    drafts.delete(roomId);
-    guard(() => productivity.removeDraft(roomId));
     $("#reply-bar").hidden = true;
     renderAttachments();
     $("#messages").scrollTop = $("#messages").scrollHeight;
@@ -1622,23 +1610,26 @@ function editMessage(m) {
     sendPayload({ type: "edit", target: m.id, text: input.value }),
   );
 }
-function deleteMessage(m) {
+async function deleteMessage(m, skipConfirmation = false) {
+  const remove = async () => {
+    await sendPayload({ type: "delete", target: m.id });
+    for (const f of m.files ?? [])
+      if (f.removePassword)
+        await api(
+          "/files/" + f.id,
+          { password: f.removePassword },
+          "DELETE",
+        ).catch(() => toast("外部APIで添付の削除に失敗した"));
+  };
+  if (skipConfirmation) return remove();
   modal(
     "メッセージを削除",
-    node("p", {}, "このメッセージを削除する？"),
-    async () => {
-      await sendPayload({ type: "delete", target: m.id });
-      for (const f of m.files ?? [])
-        if (f.removePassword)
-          await api(
-            "/files/" + f.id,
-            { password: f.removePassword },
-            "DELETE",
-          ).catch(() => toast("外部APIで添付の削除に失敗した"));
-    },
+    node("p", {}, "このメッセージを削除しますか？"),
+    remove,
     "削除",
   );
 }
+
 async function settings() {
   settingsUI.user();
 }
@@ -1702,7 +1693,6 @@ if (loginChannel)
 async function logout(revoked = false) {
   if (sending && !revoked) throw Error("送信が完了してからログアウトして");
   const sessionId = me?.session;
-  stashDraft();
   await productivity.flush().catch((error) => toast(error.message));
   productivity.reset();
   await leaveVoice();
@@ -1731,7 +1721,6 @@ async function logout(revoked = false) {
   mediaPreview.clear();
   clearDeveloperCaches();
   histories.clear();
-  drafts.clear();
   attachments = [];
   reply = null;
   $("#message-input").value = "";
@@ -2194,7 +2183,11 @@ let voiceAudio = null,
   voiceGain = null,
   voiceInput = null;
 function iconButton(name, label, fn) {
-  const el = button("", fn, "icon-button");
+  const el = node("button", {
+    type: "button",
+    class: "icon-button",
+    onClick: (event) => guard(() => fn(event)),
+  });
   setIcon(el, name, label);
   return el;
 }
@@ -2360,11 +2353,9 @@ const productivity = createProductivity({
   guard,
   toast,
   input: $("#message-input"),
-  drafts,
   getMe: () => me,
   getUser: () => state.me,
   getRoom: currentRoom,
-  getGuild: currentGuild,
   rooms: () =>
     state
       ? [
@@ -2379,23 +2370,6 @@ const productivity = createProductivity({
           })),
         ]
       : [],
-  stashDraft,
-  openRoom: async (id) => {
-    const g = state.guilds.find((g) => g.channels.some((r) => r.id === id));
-    if (g) await selectGuild(g.id);
-    else {
-      stashDraft();
-      guildId = null;
-    }
-    await selectRoom(id);
-  },
-  clearComposer: () => {
-    $("#message-input").value = "";
-    reply = null;
-    attachments = [];
-    $("#reply-bar").hidden = true;
-    renderAttachments();
-  },
 });
 $("#personal-tools").onclick = () => guard(() => productivity.open());
 for (const [id, name, label] of [
@@ -2405,7 +2379,7 @@ for (const [id, name, label] of [
   ["mobile-channels", "menu", "チャンネルを表示"],
   ["call", "phone", "音声通話"],
   ["pins", "pin", "ピン留め"],
-  ["personal-tools", "notebook", "メモ・定型文・下書き・変換"],
+  ["personal-tools", "notebook", "メモ・定型文"],
   ["toggle-members", "users", "メンバー"],
   ["attach", "plusCircle", "ファイルを添付"],
   ["emoji", "smile", "絵文字"],
@@ -2557,10 +2531,9 @@ $("#auth-form").onsubmit = async (e) => {
 $("#home").onclick = () =>
   guard(async () => {
     if (sending) throw Error("送信が完了してからチャンネルを変更して");
-    stashDraft();
     guildId = null;
     roomId = null;
-    restoreDraft();
+    clearComposer();
     renderNav();
     renderMembers();
     renderMessages();
@@ -2666,7 +2639,6 @@ $("#message-input").onkeydown = (e) => {
 let lastTyping = 0;
 $("#message-input").oninput = (e) => {
   const input = e.target;
-  productivity.saveDraft(roomId, input.value, reply);
   input.style.height = "auto";
   input.style.height = Math.min(input.scrollHeight, 160) + "px";
   if (Date.now() - lastTyping > 3000 && roomId && ws?.readyState === 1) {
