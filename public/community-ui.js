@@ -1,5 +1,5 @@
 import { emojiOnlyCount } from "./emoji-format.js";
-import { messageBlocks, inlineCode } from "./developer-format.js";
+import { markdownBlocks, markdownInline } from "./markdown.js";
 import { createDeveloperUI } from "./developer-ui.js";
 import { mentions } from "./mentions.js";
 import { icon } from "./icons.js";
@@ -264,22 +264,125 @@ export function createCommunityUI(ctx) {
       "emoji-only",
       emojiOnlyCount(text, customEmojis()) > 0,
     );
-    for (const block of messageBlocks(text)) {
-      if (block.type === "code") {
-        root.append(developer.codeBlock(block.text, block.language));
-        continue;
-      }
-      const prose = n("div", { class: "rich-prose" });
-      for (const part of inlineCode(block.text)) {
-        if (part.type === "code")
-          prose.append(n("code", { class: "inline-code" }, part.text));
-        else {
-          const fragment = plainRichText(part.text);
-          prose.append(...fragment.childNodes);
+    function inline(parent, tokens) {
+      for (const token of tokens) {
+        if (token.type === "text")
+          parent.append(...plainRichText(token.text).childNodes);
+        else if (token.type === "literal")
+          parent.append(document.createTextNode(token.text));
+        else if (token.type === "code")
+          parent.append(n("code", { class: "inline-code" }, token.text));
+        else if (token.type === "link") {
+          const url = safeURL(token.url);
+          parent.append(
+            url
+              ? Object.assign(
+                  b(
+                    token.text,
+                    () => confirmLink(url.href),
+                    "chat-external-link",
+                  ),
+                  { title: url.href },
+                )
+              : document.createTextNode(token.text),
+          );
+        } else {
+          const tags = {
+            bold: "strong",
+            italic: "em",
+            underline: "u",
+            strike: "s",
+            boldItalic: "strong",
+            spoiler: "span",
+          };
+          const el = n(tags[token.type] ?? "span");
+          if (token.type === "spoiler") {
+            el.className = "markdown-spoiler";
+            el.tabIndex = 0;
+            el.setAttribute("role", "button");
+            el.setAttribute("aria-label", "伏せ字を表示");
+            el.setAttribute("aria-expanded", "false");
+            const hidden = n("span", {
+              class: "markdown-spoiler-content",
+              "aria-hidden": "true",
+              inert: "",
+            });
+            inline(hidden, token.children);
+            el.append(hidden);
+            const reveal = () => {
+              hidden.removeAttribute("aria-hidden");
+              hidden.removeAttribute("inert");
+              el.classList.add("revealed");
+              el.setAttribute("aria-expanded", "true");
+              el.setAttribute("aria-label", "表示済みの伏せ字");
+            };
+            el.addEventListener(
+              "click",
+              (event) => {
+                if (!el.classList.contains("revealed")) {
+                  event.preventDefault();
+                  event.stopPropagation();
+                  reveal();
+                }
+              },
+              true,
+            );
+            el.onkeydown = (event) => {
+              if (
+                event.target === el &&
+                (event.key === "Enter" || event.key === " ")
+              ) {
+                event.preventDefault();
+                reveal();
+              }
+            };
+          } else if (token.type === "boldItalic") {
+            const em = n("em");
+            inline(em, token.children);
+            el.append(em);
+          } else inline(el, token.children);
+          parent.append(el);
         }
       }
-      root.append(prose);
     }
+    function blocks(parent, values) {
+      for (const block of values) {
+        if (block.type === "code") {
+          parent.append(developer.codeBlock(block.text, block.language));
+          continue;
+        }
+        if (block.type === "list") {
+          const list = n(block.ordered ? "ol" : "ul", {
+            class: "markdown-list",
+          });
+          if (block.ordered) list.start = block.start;
+          for (const item of block.items) {
+            const li = n("li");
+            blocks(li, item);
+            list.append(li);
+          }
+          parent.append(list);
+          continue;
+        }
+        const el = n(
+          block.type === "heading"
+            ? "h" + block.level
+            : block.type === "quote"
+              ? "blockquote"
+              : "div",
+          {
+            class:
+              "markdown-" +
+              block.type +
+              (block.type === "paragraph" ? " rich-prose" : ""),
+          },
+        );
+        if (block.type === "quote") blocks(el, block.children);
+        else inline(el, markdownInline(block.text));
+        parent.append(el);
+      }
+    }
+    blocks(root, markdownBlocks(text));
     return root;
   }
   function emojiPicker({ anchor, onSelect, mode = "insert" } = {}) {

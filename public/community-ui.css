@@ -649,3 +649,74 @@ button.mention:hover {
   height: 18px;
   flex: none;
 }
+
+/* Discord-compatible message formatting. */
+.message-text > .markdown-paragraph,
+.message-text .markdown-quote .markdown-paragraph,
+.message-text .markdown-list .markdown-paragraph {
+  white-space: pre-wrap;
+  min-height: 1em;
+}
+.message-text > .markdown-paragraph:empty {
+  min-height: 0;
+}
+.message-text .markdown-heading {
+  margin: 12px 0 4px;
+  color: inherit;
+  line-height: 1.3;
+  font-weight: 700;
+}
+.message-text h1.markdown-heading {
+  font-size: 1.5em;
+}
+.message-text h2.markdown-heading {
+  font-size: 1.25em;
+}
+.message-text h3.markdown-heading {
+  font-size: 1em;
+}
+.message-text .markdown-heading:first-child {
+  margin-top: 0;
+}
+.message-text .markdown-subtext {
+  font-size: 0.8125em;
+  color: var(--muted);
+}
+.message-text .markdown-list {
+  margin: 4px 0;
+  padding-left: 28px;
+  white-space: normal;
+}
+.message-text .markdown-list .markdown-list {
+  margin: 0;
+}
+.message-text .markdown-quote {
+  margin: 4px 0;
+  padding: 0 12px;
+  border-left: 4px solid var(--muted);
+  white-space: normal;
+}
+.message-text .markdown-spoiler {
+  border-radius: 3px;
+  background: var(--panel);
+  cursor: pointer;
+  box-decoration-break: clone;
+  -webkit-box-decoration-break: clone;
+}
+.message-text .markdown-spoiler:not(.revealed) .markdown-spoiler-content {
+  opacity: 0;
+  pointer-events: none;
+  user-select: none;
+}
+.message-text .markdown-spoiler.revealed {
+  background: color-mix(in srgb, var(--text) 12%, transparent);
+  cursor: auto;
+}
+.message-text .markdown-spoiler:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+.message-text.emoji-only > .markdown-paragraph {
+  font-size: 1.5em;
+  line-height: 1.6;
+}

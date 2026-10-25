@@ -1313,6 +1313,7 @@ export function createApp(
           "/productivity.js": "productivity.js",
           "/personal-store.js": "personal-store.js",
           "/developer-format.js": "developer-format.js",
+          "/markdown.js": "markdown.js",
           "/developer-ui.js": "developer-ui.js",
           "/developer-ui.css": "developer-ui.css",
           "/media-preview.js": "media-preview.js",

@@ -25,7 +25,8 @@
     "test:developer": "bun tests/developer-interface.mjs",
     "test:release": "bun tests/release-interface.mjs",
     "test:lifecycle": "bun tests/lifecycle-interface.mjs",
-    "test:files:live": "bun tests/files-live.mjs"
+    "test:files:live": "bun tests/files-live.mjs",
+    "test:markdown": "bun tests/markdown-interface.mjs"
   },
   "devDependencies": {
     "@types/bun": "^1.3.0",
