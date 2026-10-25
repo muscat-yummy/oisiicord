@@ -6,8 +6,9 @@ import { createLifecycle } from "./lifecycle";
 import { createFileAdapter, FileServiceError } from "./file-adapter";
 import { createVendor } from "./vendor";
 import { createBranding } from "./branding";
+import { createBetaSettings, matchesBetaCode } from "./beta";
 import { canonical, verify, fingerprint } from "../public/crypto.js";
-import { resolve } from "node:path";
+import { resolve, join } from "node:path";
 
 type Row = Record<string, any>;
 type WSData = {
@@ -38,6 +39,7 @@ export function createApp(
     origin?: string;
     hostname?: string;
     fileOrigin?: string;
+    settingsDirectory?: string;
   } = {},
 ) {
   const storage = options.path === undefined ? prepareStorage() : undefined;
@@ -54,6 +56,21 @@ export function createApp(
   const secure = site.protocol === "https:";
   const cookieName = secure ? "__Host-oisiicord" : "oisiicord";
   const files = createFileAdapter(options.fileOrigin);
+  const readBeta = createBetaSettings(
+    options.settingsDirectory ?? join(projectRoot, "settings"),
+  );
+  function registrationPolicy() {
+    try {
+      return readBeta();
+    } catch {
+      return fail(503, "登録設定を読み込めません。管理者に連絡してください");
+    }
+  }
+  function checkRegistrationCode(code: unknown) {
+    const policy = registrationPolicy();
+    if (policy.required && !matchesBetaCode(policy.code, code))
+      fail(403, "招待コードが正しくありません");
+  }
   const sockets = new Set<Bun.ServerWebSocket<WSData>>();
   const buckets = new Map<string, { n: number; reset: number }>();
   const one = (sql: string, ...args: any[]): Row | undefined =>
@@ -485,9 +502,12 @@ export function createApp(
           sha("unknown/" + name).slice(0, 44),
       });
     }
+    if (p === "/api/auth/registration" && method === "GET")
+      return response({ inviteRequired: registrationPolicy().required });
     if (p === "/api/auth/register" && method === "POST") {
       limit("register:" + ip, 5, 3600000);
       const b = await json(req);
+      checkRegistrationCode(b.inviteCode);
       const username = text(b.username, 32).toLowerCase();
       if (
         !/^[a-z0-9_]{3,32}$/.test(username) ||
@@ -510,6 +530,7 @@ export function createApp(
         memoryCost: 65536,
         timeCost: 3,
       });
+      checkRegistrationCode(b.inviteCode);
       try {
         run(
           "INSERT INTO users VALUES(?,?,?,?,?,?,?,?)",

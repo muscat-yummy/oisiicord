@@ -170,20 +170,26 @@ test("publication errors roll back replaced source files and retain user files",
   expect(readFileSync(join(root, ".env"), "utf8")).toBe("PORT=4000\n");
 });
 
-test("ZIP updates preserve the host-written changelog even when the archive includes one", async () => {
+test("ZIP updates preserve host-written changelog and beta settings even when the archive includes them", async () => {
   const { root, storage } = setup(),
     revision = "e".repeat(40),
     content = "## My update\n\nHost-written text";
   mkdirSync(join(root, "settings"));
   writeFileSync(join(root, "settings", "changelog.md"), content);
+  const beta = JSON.stringify({ beta_mode: true, code: crypto.randomUUID() });
+  writeFileSync(join(root, "settings", "beta.json"), beta);
   await updateArchive(root, {
     storage,
     fetcher: fetcher(
       revision,
-      await archive(revision, { "settings/changelog.md": "replacement text" }),
+      await archive(revision, {
+        "settings/changelog.md": "replacement text",
+        "settings/beta.json": JSON.stringify({ beta_mode: false, code: "" }),
+      }),
     ),
   });
   expect(readFileSync(join(root, "settings", "changelog.md"), "utf8")).toBe(
     content,
   );
+  expect(readFileSync(join(root, "settings", "beta.json"), "utf8")).toBe(beta);
 });

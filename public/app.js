@@ -2813,11 +2813,25 @@ document.addEventListener("pointerdown", (e) => {
   if (!$("#guild-menu").contains(e.target) && !e.target.closest(".side-header"))
     $("#guild-menu").hidden = true;
 });
+async function registrationOptions() {
+  const { inviteRequired } = await api("/auth/registration");
+  if (registering) {
+    $("#invite-code-label").hidden = !inviteRequired;
+    $("#invite-code").required = !!inviteRequired;
+  }
+}
 $("#auth-switch").onclick = () => {
   registering = !registering;
   $("#auth-title").textContent = registering ? "アカウント作成" : "ログイン";
   $("#display-label").hidden = !registering;
   $("#display").required = registering;
+  $("#invite-code-label").hidden = true;
+  $("#invite-code").required = false;
+  $("#invite-code").value = "";
+  if (registering)
+    registrationOptions().catch((error) => {
+      if (registering) $("#auth-error").textContent = error.message;
+    });
   $("#auth-submit").textContent = registering ? "アカウントを作成" : "ログイン";
   $("#auth-switch").textContent = registering
     ? "ログインに戻る"
@@ -2847,6 +2861,7 @@ $("#auth-form").onsubmit = async (e) => {
       privateKeys = identity.privateKeys;
       const imported = await C.importIdentity(privateKeys, identity.keys);
       result = await api("/auth/register", {
+        inviteCode: $("#invite-code").value,
         id,
         username,
         display: $("#display").value,
@@ -2881,6 +2896,7 @@ $("#auth-form").onsubmit = async (e) => {
     await enterAccount(result, identity);
   } catch (error) {
     $("#auth-error").textContent = error.message;
+    if (registering) await registrationOptions().catch(() => {});
   } finally {
     submit.disabled = false;
     submit.textContent = registering ? "アカウントを作成" : "ログイン";

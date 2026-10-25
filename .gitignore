@@ -13,3 +13,5 @@ settings/dm.mp3
 /docs/release-review/screenshots/
 /docs/release-review/*.jpg
 /docs/release-review/gallery.html
+
+/settings/beta.json
