@@ -130,6 +130,7 @@ export function createSettings(ctx) {
             ["accessibility", "アクセシビリティ", "accessibility"],
             ["keybinds", "キー操作", "keyboard"],
             ["sessions", "ログイン中の端末", "monitor"],
+            ["blocked", "ブロックしたユーザー", "shield"],
           ]
         : [
             ["overview", "サーバープロフィール", "image"],
@@ -213,6 +214,15 @@ export function createSettings(ctx) {
           "danger",
         ),
       );
+    if (mode === "server" && ctx.getGuild().owner !== ctx.getMe().id)
+      nav.append(
+        action(
+          "サーバーから退出",
+          () => ctx.leaveGuild(ctx.getGuild()),
+          "logout",
+          "danger",
+        ),
+      );
     const exit = action("設定を閉じる", close, "close", "settings-exit");
     exit.setAttribute("aria-label", "設定を閉じる");
     exit.replaceChildren(icon("close", 24), n("kbd", {}, "ESC"));
@@ -265,6 +275,7 @@ export function createSettings(ctx) {
         card,
         heading("アカウント"),
         row("暗号鍵のバックアップ", "", [b("ダウンロード", ctx.backup)]),
+        row("アカウントを削除", "", [b("削除", ctx.deleteAccount, "danger")]),
       );
     }
     if (selected === "profile") {
@@ -639,6 +650,18 @@ export function createSettings(ctx) {
         row("スピーカーミュート切り替え", "Ctrl + Shift + D"),
         row("設定を閉じる", "Esc"),
       );
+    }
+    if (selected === "blocked") {
+      area.append(heading("ブロックしたユーザー"));
+      for (const person of await api("/blocks"))
+        area.append(
+          row(person.display, "@" + person.username, [
+            b("ブロックを解除", async () => {
+              await ctx.setBlocked(person.id, false);
+              await navigate("blocked");
+            }),
+          ]),
+        );
     }
     if (selected === "sessions") {
       area.append(heading("ログイン中の端末"));

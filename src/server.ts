@@ -2,6 +2,8 @@ import { database } from "./db";
 import { prepareStorage, projectRoot } from "./storage";
 import { createCommunity } from "./community";
 import { createInvitations } from "./invitations";
+import { createLifecycle } from "./lifecycle";
+import { createFileAdapter, FileServiceError } from "./file-adapter";
 import { createVendor } from "./vendor";
 import { createBranding } from "./branding";
 import { canonical, verify, fingerprint } from "../public/crypto.js";
@@ -51,7 +53,7 @@ export function createApp(
     throw Error("APP_ORIGIN requires HTTPS outside localhost");
   const secure = site.protocol === "https:";
   const cookieName = secure ? "__Host-oisiicord" : "oisiicord";
-  const fileOrigin = options.fileOrigin ?? "https://api.end2end.tech";
+  const files = createFileAdapter(options.fileOrigin);
   const sockets = new Set<Bun.ServerWebSocket<WSData>>();
   const buckets = new Map<string, { n: number; reset: number }>();
   const one = (sql: string, ...args: any[]): Row | undefined =>
@@ -109,6 +111,7 @@ export function createApp(
     return {
       ...row,
       keys: JSON.parse(row.keys),
+      deleted: !!one("SELECT 1 FROM deleted_accounts WHERE user=?", id),
       profile: JSON.parse(
         one("SELECT data FROM profiles WHERE user=?", id)?.data ?? "{}",
       ),
@@ -173,8 +176,12 @@ export function createApp(
       return fail(415, "JSONが必要");
     const raw = await bounded(req, max);
     try {
-      return JSON.parse(new TextDecoder().decode(raw));
-    } catch {
+      const parsed = JSON.parse(new TextDecoder().decode(raw));
+      const path = new URL(req.url).pathname;
+      if (!["/api/auth/register", "/api/auth/login"].includes(path)) auth(req);
+      return parsed;
+    } catch (error) {
+      if (error instanceof HttpError) throw error;
       return fail(400, "JSONが不正");
     }
   }
@@ -236,6 +243,7 @@ export function createApp(
     purpose: "event" | "signal" = "event",
   ) {
     const h = e?.header;
+    lifecycle.assertDM(r, uid);
     if (
       !h ||
       h.v !== 1 ||
@@ -280,6 +288,7 @@ export function createApp(
       fail(400, "署名の検証に失敗");
     // Signature verification yields; recheck authorization after it to close membership races.
     roomAccess(r.id, uid);
+    lifecycle.assertDM(r, uid);
     if (r.guild) {
       const expected =
         purpose === "signal"
@@ -336,6 +345,7 @@ export function createApp(
       ...dms.flatMap((r) => r.users),
     ]);
     return {
+      ...lifecycle.state(uid),
       me: user(uid),
       guilds,
       dms,
@@ -398,7 +408,45 @@ export function createApp(
     changed,
     audit,
     user,
-    ensureMembershipLimit: community.ensureMembershipLimit,
+    ensureMembershipLimit: (uid: string) => {
+      if (lifecycle.deleted(uid)) fail(401, "ログインが必要");
+      community.ensureMembershipLimit(uid);
+    },
+  });
+  const lifecycle = createLifecycle({
+    db,
+    one,
+    all,
+    run,
+    json,
+    response,
+    fail,
+    user,
+    changed,
+    audit,
+    invitations,
+    removeRoles: community.removeMember,
+    emit: emitUsers,
+    cookieName,
+    secure,
+    disconnect: (uid: string, guild?: string) => {
+      for (const socket of sockets) {
+        const room =
+          socket.data.voice &&
+          one("SELECT guild FROM rooms WHERE id=?", socket.data.voice);
+        if (guild) {
+          if (
+            socket.data.voice &&
+            (!room ||
+              (room.guild === guild && (!uid || socket.data.user === uid)))
+          )
+            leaveVoice(socket);
+        } else if (socket.data.user === uid) {
+          leaveVoice(socket);
+          socket.close(4003, "Account deleted");
+        }
+      }
+    },
   });
   const branding = createBranding(projectRoot, common);
   const vendor = createVendor(projectRoot, common, origin);
@@ -484,7 +532,10 @@ export function createApp(
       const b = await json(req);
       const name = text(b.username, 32).toLowerCase();
       limit("account:" + name, 12, 300000);
-      const u = one("SELECT * FROM users WHERE username=?", name);
+      const u = one(
+        "SELECT * FROM users WHERE username=? AND NOT EXISTS(SELECT 1 FROM deleted_accounts d WHERE d.user=users.id)",
+        name,
+      );
       // Always perform a memory-hard verification to avoid cheap username timing probes.
       const verifier = u?.auth ?? dummyHash;
       if (
@@ -494,11 +545,14 @@ export function createApp(
         !u
       )
         fail(401, "ユーザー名またはパスワードが違う");
+      if (lifecycle.deleted(u!.id)) fail(401, "ログインが必要");
       return sessionResponse(u!.id);
     }
     const session = auth(req),
       uid = session.user;
     limit("api:" + uid, 180);
+    const lifecycleResponse = await lifecycle.handle(req, url, uid);
+    if (lifecycleResponse) return lifecycleResponse;
     const invitationResponse = await invitations.handle(req, url, uid);
     if (invitationResponse) return invitationResponse;
     const communityResponse = await community.handle(req, url, uid);
@@ -1065,6 +1119,7 @@ export function createApp(
     if (p === "/api/dms" && method === "POST") {
       const b = await json(req);
       user(b.user);
+      lifecycle.canContact(uid, b.user);
       if (b.user === uid) fail(400, "自分宛てのDMは作成できない");
       const existing = one(
         "SELECT a.room FROM peers a JOIN peers b ON a.room=b.room WHERE a.user=? AND b.user=?",
@@ -1180,54 +1235,19 @@ export function createApp(
       if (req.headers.get("content-type") !== "application/octet-stream")
         fail(415, "暗号化バイナリが必要");
       const data = await bounded(req, 25 * 1024 * 1024 + 16);
-      const form = new FormData();
-      form.append("file", new Blob([data]), uuid() + ".enc");
-      const result = await fetch(fileOrigin + "/upload", {
-        method: "POST",
-        body: form,
-        redirect: "error",
-        signal: AbortSignal.timeout(60000),
-      });
-      const out = (await result.json()) as Row;
-      if (
-        !result.ok ||
-        out.Status !== "OK" ||
-        !idPattern.test(out.FileID) ||
-        typeof out.RemovePassword !== "string"
-      )
-        fail(502, "添付APIのアップロードに失敗");
-      return response({ id: out.FileID, removePassword: out.RemovePassword });
+      return response(await files.upload(data));
     }
     m = p.match(/^\/api\/files\/([a-zA-Z0-9_-]+)$/);
     if (m && method === "GET") {
       limit("download:" + uid, 40);
-      const upstream = await fetch(
-        fileOrigin + "/download?id=" + encodeURIComponent(m[1]),
-        { signal: AbortSignal.timeout(60000), redirect: "error" },
-      );
-      if (!upstream.ok) fail(502, "添付ファイルを取得できない");
-      const data = await bounded(
-        new Request(origin, {
-          method: "POST",
-          body: upstream.body,
-          duplex: "half",
-        } as RequestInit),
-        25 * 1024 * 1024 + 16,
-      );
+      const data = await files.download(m[1]);
       return new Response(data, {
         headers: { ...common, "Content-Type": "application/octet-stream" },
       });
     }
     if (m && method === "DELETE") {
       const b = await json(req);
-      const u = new URL(fileOrigin + "/delete");
-      u.searchParams.set("id", m[1]);
-      u.searchParams.set("password", text(b.password, 256));
-      const upstream = await fetch(u, {
-        signal: AbortSignal.timeout(30000),
-        redirect: "error",
-      });
-      if (!upstream.ok) fail(502, "削除APIに失敗");
+      await files.remove(m[1], text(b.password, 256));
       return response({ ok: true });
     }
     return fail(404, "APIが見つからない");
@@ -1319,7 +1339,11 @@ export function createApp(
           );
         return response(
           { error: e instanceof HttpError ? e.message : "サーバー処理に失敗" },
-          e instanceof HttpError ? e.status : 500,
+          e instanceof HttpError
+            ? e.status
+            : e instanceof FileServiceError
+              ? 502
+              : 500,
         );
       }
     },
@@ -1368,6 +1392,7 @@ export function createApp(
             return;
           }
           const r = roomAccess(m.room, ws.data.user);
+          lifecycle.assertDM(r, ws.data.user);
           if (m.type === "join-voice") {
             if (r.guild)
               community.requirePermission(r.guild, ws.data.user, "connect");
@@ -1383,7 +1408,11 @@ export function createApp(
                 other.send(JSON.stringify({ type: "voice-replaced" }));
               }
             const peers = [...sockets].filter(
-              (s) => s.data.voice === r.id && s !== ws && sessionValid(s.data),
+              (s) =>
+                s.data.voice === r.id &&
+                s !== ws &&
+                sessionValid(s.data) &&
+                !lifecycle.blocked(ws.data.user, s.data.user),
             );
             if (peers.length >= 5) fail(409, "音声通話は最大6接続");
             leaveVoice(ws);
@@ -1416,7 +1445,12 @@ export function createApp(
             await validateEnvelope(m.envelope, r, ws.data.user, "signal");
             emitUsers(
               [...sockets]
-                .filter((s) => s.data.voice === r.id && s !== ws)
+                .filter(
+                  (s) =>
+                    s.data.voice === r.id &&
+                    s !== ws &&
+                    !lifecycle.blocked(ws.data.user, s.data.user),
+                )
                 .map((s) => s.data.user),
               { type: "signal", room: r.id, envelope: m.envelope },
             );

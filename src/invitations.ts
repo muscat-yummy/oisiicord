@@ -10,6 +10,7 @@ CREATE TABLE IF NOT EXISTS invitation_grants(id TEXT PRIMARY KEY,guild TEXT NOT 
 CREATE TABLE IF NOT EXISTS guild_admissions(guild TEXT NOT NULL REFERENCES guilds(id) ON DELETE CASCADE,user TEXT NOT NULL REFERENCES users(id),record TEXT NOT NULL,PRIMARY KEY(guild,user));
 CREATE TABLE IF NOT EXISTS membership_certificates(guild TEXT NOT NULL REFERENCES guilds(id) ON DELETE CASCADE,version INTEGER NOT NULL,data TEXT NOT NULL,PRIMARY KEY(guild,version));
 CREATE TABLE IF NOT EXISTS history_credentials(guild TEXT NOT NULL REFERENCES guilds(id) ON DELETE CASCADE,user TEXT NOT NULL REFERENCES users(id),invite TEXT NOT NULL,envelope TEXT NOT NULL,PRIMARY KEY(guild,user,invite));
+CREATE TABLE IF NOT EXISTS guild_membership_changes(guild TEXT NOT NULL REFERENCES guilds(id) ON DELETE CASCADE,seq INTEGER NOT NULL,record TEXT NOT NULL,PRIMARY KEY(guild,seq));
 CREATE INDEX IF NOT EXISTS invitation_grants_guild ON invitation_grants(guild);`;
 type Context = {
   db: any;
@@ -68,6 +69,10 @@ export function createInvitations(ctx: Context) {
         "SELECT record FROM guild_admissions WHERE guild=? ORDER BY rowid",
         guild,
       ).map((r) => JSON.parse(r.record)),
+      changes: all(
+        "SELECT record FROM guild_membership_changes WHERE guild=? ORDER BY seq",
+        guild,
+      ).map((r) => JSON.parse(r.record)),
       version: g.version,
     };
     run(
@@ -78,8 +83,28 @@ export function createInvitations(ctx: Context) {
     );
     return data;
   }
+  function appendChange(guild: string, record: any) {
+    const g = one("SELECT * FROM guilds WHERE id=?", guild)!;
+    const version = g.version + 1;
+    run(
+      "INSERT INTO guild_membership_changes VALUES(?,?,?)",
+      guild,
+      version,
+      JSON.stringify(record),
+    );
+    run("UPDATE guilds SET version=? WHERE id=?", version, guild);
+    run(
+      "INSERT INTO rosters VALUES(?,?,?,?)",
+      guild,
+      version,
+      g.roster,
+      g.signature,
+    );
+    saveCertificate(guild);
+  }
   function rosterChanged(guild: string) {
     run("DELETE FROM guild_admissions WHERE guild=?", guild);
+    run("DELETE FROM guild_membership_changes WHERE guild=?", guild);
     run("UPDATE invitation_grants SET revoked=1 WHERE guild=?", guild);
     saveCertificate(guild);
   }
@@ -286,26 +311,7 @@ export function createInvitations(ctx: Context) {
           if (approval) run("INSERT INTO requests VALUES(?,?)", row.guild, uid);
           else {
             run("INSERT INTO members VALUES(?,?,?)", row.guild, uid, "member");
-            run(
-              "INSERT INTO guild_admissions VALUES(?,?,?)",
-              row.guild,
-              uid,
-              JSON.stringify(record),
-            );
-            const nextVersion = current.g.version + 1;
-            run(
-              "UPDATE guilds SET version=? WHERE id=?",
-              nextVersion,
-              row.guild,
-            );
-            run(
-              "INSERT INTO rosters VALUES(?,?,?,?)",
-              row.guild,
-              nextVersion,
-              current.g.roster,
-              current.g.signature,
-            );
-            saveCertificate(row.guild);
+            appendChange(row.guild, { type: "admission", record });
             audit(row.guild, uid, "member.join", user(uid).display);
           }
         })();
@@ -374,5 +380,5 @@ export function createInvitations(ctx: Context) {
       }
     }
   }
-  return { handle, state, certificate, rosterChanged };
+  return { handle, state, certificate, rosterChanged, appendChange };
 }

@@ -23,7 +23,9 @@
     "test:workspace": "bun tests/workspace-interface.mjs",
     "test:productivity": "bun tests/productivity-interface.mjs",
     "test:developer": "bun tests/developer-interface.mjs",
-    "test:release": "bun tests/release-interface.mjs"
+    "test:release": "bun tests/release-interface.mjs",
+    "test:lifecycle": "bun tests/lifecycle-interface.mjs",
+    "test:files:live": "bun tests/files-live.mjs"
   },
   "devDependencies": {
     "@types/bun": "^1.3.0",

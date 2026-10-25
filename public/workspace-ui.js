@@ -337,7 +337,13 @@ export function createWorkspaceUI(ctx) {
         action: () => g.channels.forEach((r) => ctx.markRead(r.id)),
       },
       { label: "サーバーIDをコピー", icon: "copy", action: () => copy(g.id) },
-      owner && { separator: true },
+      { separator: true },
+      !owner && {
+        label: "サーバーから退出",
+        icon: "logout",
+        danger: true,
+        action: () => ctx.leaveGuild(g),
+      },
       owner && {
         label: "サーバーを削除",
         icon: "trash",
@@ -495,7 +501,9 @@ export function createWorkspaceUI(ctx) {
       "div",
       { class: "profile-details" },
       n("h3", {}, u.display ?? u.username),
-      n("div", { class: "profile-handle" }, "@" + u.username),
+      u.deleted
+        ? null
+        : n("div", { class: "profile-handle" }, "@" + u.username),
       profile.pronouns ? n("small", {}, profile.pronouns) : null,
     );
     if (profile.bio)

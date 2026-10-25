@@ -52,6 +52,9 @@ let me,
   videoMode = null,
   reconnectTimer,
   heartbeat;
+const revealedBlocked = new Set();
+const blockedUser = (id) => !!state?.blockedUsers?.some((u) => u.id === id);
+const blockedContact = (id) => !!state?.blockedContacts?.includes(id);
 const histories = new Map(),
   users = new Map(),
   loading = new Map(),
@@ -255,6 +258,14 @@ async function refreshState() {
           owner.keys,
           minimumBase,
         );
+      if (g.certificate)
+        (storage.departures ??= {})[g.id] = M.departureCheckpoint(
+          g.certificate,
+          storage.departures?.[g.id],
+        );
+      g.activeInvites = (g.activeInvites ?? []).filter(
+        (i) => i.grant.created > (g.roster.inviteCutoff ?? 0),
+      );
       if (!g.roster.members.some((m) => m.id === me.id))
         throw Error("署名済みメンバー一覧に自分がいない");
       if (g.version !== g.roster.version || g.id !== g.roster.guild)
@@ -285,6 +296,10 @@ async function refreshState() {
   }
   next.dms = acceptedDMs;
   state = next;
+  renderTyping();
+  for (const id of [...peers.keys()]) if (blockedContact(id)) removePeer(id);
+  if (activeVoice && state.unavailableDMs?.includes(activeVoice))
+    await leaveVoice();
   saveTrust();
   if (guildId && !currentGuild()) {
     guildId = null;
@@ -547,6 +562,8 @@ function renderNav() {
   renderChannelAccess();
 }
 function clearComposer() {
+  typingUsers.clear();
+  renderTyping();
   mentionInput.close();
   productivity.closeCandidates();
   $("#message-input").value = "";
@@ -844,7 +861,23 @@ function renderChannelAccess() {
       ["announcement", "rules"].includes(r.kind) &&
       !hasPermission("manageMessages", g),
     needsRules = !!g && !!g.rules?.requireAcceptance && !g.rulesAccepted;
-  const denied = restricted || needsRules || !hasPermission("sendMessages", g);
+  const dmDenied = !!r && state.unavailableDMs?.includes(r.id);
+  const denied =
+    dmDenied || restricted || needsRules || !hasPermission("sendMessages", g);
+  $("#call").disabled = !!dmDenied;
+  if (dmDenied) {
+    notice.hidden = false;
+    const other = r.users.find((id) => id !== me.id);
+    notice.append(
+      node(
+        "span",
+        {},
+        blockedUser(other) ? "ブロック中" : "このDMには送信できません",
+      ),
+    );
+    if (blockedUser(other))
+      notice.append(button("ブロックを解除", () => setBlocked(other, false)));
+  }
   $("#message-input").disabled = denied;
   for (const id of ["send", "attach", "emoji"]) $("#" + id).disabled = denied;
   if (needsRules) {
@@ -933,6 +966,20 @@ function renderMessages() {
   let day = "",
     previousMessage = null;
   for (const m of list) {
+    if (blockedUser(m.author) && !revealedBlocked.has(m.id)) {
+      const hidden = button(
+        "ブロック中のメッセージを表示",
+        () => {
+          revealedBlocked.add(m.id);
+          renderMessages();
+        },
+        "blocked-message",
+      );
+      hidden.setAttribute("data-blocked-message", m.id);
+      area.append(hidden);
+      previousMessage = null;
+      continue;
+    }
     const date = new Date(m.envelope.header.at),
       nextDay = date.toLocaleDateString("ja-JP", {
         year: "numeric",
@@ -980,7 +1027,10 @@ function renderMessages() {
         node(
           "div",
           { class: "reply-preview" },
-          "返信: " + (original?.text ?? "以前のメッセージ").slice(0, 120),
+          "返信: " +
+            (blockedUser(original?.author)
+              ? "ブロック中のメッセージ"
+              : (original?.text ?? "以前のメッセージ").slice(0, 120)),
         ),
       );
     }
@@ -1109,6 +1159,7 @@ async function sendPayload(payload) {
               users.get(g.owner).keys,
               {
                 guild: g.id,
+                inviteCutoff: g.roster.inviteCutoff ?? 0,
                 baseVersion: (g.certificate?.baseRoster ?? g.roster).version,
               },
             )
@@ -1308,6 +1359,7 @@ function guildActions() {
     menu.append(el);
   }
   if (g.owner === me.id) item("友達を招待", "users", inviteDialog);
+  else item("サーバーから退出", "logout", () => leaveGuild(g), "danger");
   item("サーバー設定", "settings", () => settingsUI.server());
   if (g.owner === me.id) {
     item("チャンネルを作成", "plus", () => newChannel("text"));
@@ -1564,6 +1616,144 @@ function newChannel(kind = "text", onCreated, category = null) {
   workspaceUI.channelDialog({ kind, category, onSaved: onCreated });
 }
 
+async function leaveRecord(g) {
+  const proof = M.departure(
+    g.id,
+    me.id,
+    (g.certificate?.baseRoster ?? g.roster).version,
+  );
+  return { proof, signature: await C.sign(proof, me) };
+}
+function leaveGuild(g = currentGuild()) {
+  if (!g || g.owner === me.id)
+    throw Error("所有者はサーバーを削除してから退出してください");
+  modal(
+    "サーバーから退出",
+    [
+      node("p", {}, g.name + "から退出しますか？"),
+      node("p", {}, "現在の招待リンクは無効になります。"),
+    ],
+    async () => {
+      if (sending) throw Error("送信が完了してから退出してください");
+      const record = await leaveRecord(g);
+      await api("/guilds/" + g.id + "/leave", record);
+      (storage.departures ??= {})[g.id] = M.departureCheckpoint(
+        {
+          ...g.certificate,
+          changes: [
+            ...(g.certificate.changes ?? []),
+            { type: "departure", ...record },
+          ],
+        },
+        storage.departures?.[g.id],
+      );
+      saveTrust();
+      if (g.channels.some((r) => r.id === activeVoice)) await leaveVoice();
+      for (const r of g.channels) {
+        histories.delete(r.id);
+        unread.delete(r.id);
+      }
+      invalidateCredentials(g.id);
+      if (guildId === g.id) {
+        guildId = null;
+        roomId = null;
+        clearComposer();
+      }
+      settingsUI.close();
+      await refresh();
+    },
+    "退出",
+  );
+}
+async function setBlocked(id, on) {
+  await api("/blocks/" + id, {}, on ? "PUT" : "DELETE");
+  revealedBlocked.clear();
+  if (on && peers.has(id)) removePeer(id);
+  await refresh();
+}
+function wipeAccountBrowser(id) {
+  if (typeof id !== "string") return;
+  for (const prefix of [
+    "oisiicord-trust-",
+    "oisiicord-preferences-",
+    "oisiicord-personal-",
+    "oisiicord-emoji-recent-",
+  ])
+    localStorage.removeItem(prefix + id);
+}
+function deleteAccountDialog() {
+  const account = state.me;
+  const username = node("input", {
+    required: true,
+    "aria-label": "削除するユーザー名",
+    autocomplete: "off",
+  });
+  const password = node("input", {
+    required: true,
+    type: "password",
+    autocomplete: "current-password",
+    "aria-label": "現在のパスワード",
+  });
+  const owned = state.guilds.filter((g) => g.owner === me.id);
+  const confirm = node("input", {
+    type: "checkbox",
+    "aria-label": "所有サーバーの削除に同意",
+  });
+  modal(
+    "アカウントを削除",
+    node(
+      "div",
+      { class: "workspace-editor" },
+      node(
+        "p",
+        {},
+        "アカウントと所有サーバーを削除します。送信済みのメッセージは残ります。",
+      ),
+      owned.length
+        ? node(
+            "label",
+            {},
+            confirm,
+            "所有サーバーも削除する: " + owned.map((g) => g.name).join("、"),
+          )
+        : null,
+      node("label", {}, "ユーザー名", username),
+      node("label", {}, "現在のパスワード", password),
+    ),
+    async () => {
+      if (sending) throw Error("送信が完了してから削除してください");
+      if (username.value !== account.username)
+        throw Error("ユーザー名が一致しません");
+      if (owned.length && !confirm.checked)
+        throw Error("所有サーバーの削除を確認してください");
+      const identity = me,
+        id = identity.id;
+      const proof = {
+        v: 1,
+        type: "delete-account",
+        user: id,
+        at: Date.now(),
+        nonce: crypto.randomUUID(),
+        owned: owned.map((g) => g.id).sort(),
+        departures: await Promise.all(
+          state.guilds.filter((g) => g.owner !== id).map(leaveRecord),
+        ),
+      };
+      const auth = (await C.credentials(password.value, identity.salt)).auth;
+      await api(
+        "/me",
+        { proof, signature: await C.sign(proof, identity), auth },
+        "DELETE",
+      );
+      password.value = "";
+      wipeAccountBrowser(id);
+      loginChannel?.postMessage({ type: "delete", user: id });
+      settingsUI.close();
+      if (me?.id === id) await logout(true);
+    },
+    "削除",
+  );
+}
 function newDM() {
   prompt(
     "DM を開始",
@@ -1584,7 +1774,7 @@ function newDM() {
 async function memberDialog(u) {
   const card = workspaceUI.profileCard(u);
   const actions = node("div", { class: "buttons" });
-  if (u.id !== me.id)
+  if (u.id !== me.id && !u.deleted)
     actions.append(
       button(
         "メッセージ",
@@ -1599,12 +1789,33 @@ async function memberDialog(u) {
         "primary",
       ),
     );
-  else
+  else if (u.id === me.id)
     actions.append(
       button("プロフィールを編集", () => {
         $("#modal").close();
         settingsUI.user("profile");
       }),
+    );
+  if (u.id !== me.id && !u.deleted)
+    actions.append(
+      button(
+        blockedUser(u.id) ? "ブロックを解除" : "ブロック",
+        async () => {
+          const on = !blockedUser(u.id);
+          if (on)
+            modal(
+              "ユーザーをブロック",
+              node("p", {}, u.display + "をブロックしますか？"),
+              () => setBlocked(u.id, true),
+              "ブロック",
+            );
+          else {
+            await setBlocked(u.id, false);
+            memberDialog(u);
+          }
+        },
+        "danger",
+      ),
     );
   actions.append(
     button("公開鍵を確認", async () => {
@@ -1623,7 +1834,11 @@ async function memberDialog(u) {
       ]);
     }),
   );
-  if (currentGuild()?.owner === me.id && u.id !== me.id)
+  if (
+    currentGuild()?.owner === me.id &&
+    u.id !== me.id &&
+    currentGuild().roster.members.some((member) => member.id === u.id)
+  )
     actions.append(
       button(
         "メンバーを削除",
@@ -1739,6 +1954,11 @@ const loginChannel =
   "BroadcastChannel" in window ? new BroadcastChannel("oisiicord-login") : null;
 if (loginChannel)
   loginChannel.onmessage = (event) => {
+    if (event.data?.type === "delete") {
+      wipeAccountBrowser(event.data.user);
+      if (me?.id === event.data.user) guard(() => logout(true));
+      return;
+    }
     if (
       me &&
       ((event.data.type === "logout" && event.data.session === me.session) ||
@@ -1777,6 +1997,7 @@ async function logout(revoked = false) {
   mediaPreview.clear();
   clearDeveloperCaches();
   histories.clear();
+  revealedBlocked.clear();
   loading.clear();
   reloadHistory.clear();
   $("#network-status").hidden = true;
@@ -1855,6 +2076,11 @@ function connect() {
     if (ws !== socket) return;
     networkStatus(false);
     clearInterval(heartbeat);
+    if (event.code === 4003) {
+      wipeAccountBrowser(me.id);
+      guard(() => logout(true));
+      return;
+    }
     if (event.code === 4001) {
       guard(() => logout(true));
       return;
@@ -1885,7 +2111,9 @@ function connect() {
         ];
         if (
           activeVoice === m.room &&
-          m.users.some((id) => id !== me.id && !previous.includes(id))
+          m.users.some(
+            (id) => id !== me.id && !blockedUser(id) && !previous.includes(id),
+          )
         )
           sound("peerJoin");
         renderNav();
@@ -1901,6 +2129,7 @@ function connect() {
           ?.events.find((e) => e.seq === m.seq);
         const notify =
           event?.author !== me.id &&
+          !blockedUser(event?.author) &&
           !event?.invalid &&
           shouldNotify(
             event?.payload,
@@ -1935,13 +2164,14 @@ function connect() {
         if (
           m.room !== roomId &&
           event?.payload?.type === "message" &&
-          event.author !== me.id
+          event.author !== me.id &&
+          !blockedUser(event.author)
         ) {
           unread.add(m.room);
           renderNav();
         }
       }
-      if (m.type === "typing" && m.room === roomId) {
+      if (m.type === "typing" && m.room === roomId && !blockedUser(m.user)) {
         typingUsers.set(m.user, Date.now());
         renderTyping();
       }
@@ -1955,7 +2185,7 @@ function connect() {
             (v) => !(v.room === m.room && v.user === m.user),
           );
         if (m.room === activeVoice && m.user !== me.id) {
-          sound("peerLeave");
+          if (!blockedUser(m.user)) sound("peerLeave");
           removePeer(m.user);
         }
         renderNav();
@@ -1965,7 +2195,8 @@ function connect() {
 }
 function renderTyping() {
   const now = Date.now();
-  for (const [id, t] of typingUsers) if (now - t > 4500) typingUsers.delete(id);
+  for (const [id, t] of typingUsers)
+    if (now - t > 4500 || blockedUser(id)) typingUsers.delete(id);
   $("#typing").textContent =
     [...typingUsers.keys()]
       .map((id) => users.get(id)?.display ?? "ユーザー")
@@ -1992,6 +2223,8 @@ async function sendSignal(payload) {
 }
 async function joinVoice(id) {
   if (sending) throw Error("送信が完了してから通話を開始して");
+  if (state.unavailableDMs?.includes(id))
+    throw Error("このDMでは通話できません");
   if (activeVoice === id) {
     await selectRoom(id);
     return;
@@ -2084,6 +2317,7 @@ function addTile(id, stream, local = false) {
   });
 }
 async function createPeer(id, initiator = false) {
+  if (blockedContact(id)) return null;
   if (peers.has(id)) return peers.get(id);
   const pc = new RTCPeerConnection({ iceServers: state.iceServers ?? [] }),
     entry = { pc, candidates: [] };
@@ -2117,7 +2351,8 @@ async function createPeer(id, initiator = false) {
   return entry;
 }
 async function handleSignal(m) {
-  if (m.room !== activeVoice) return;
+  if (m.room !== activeVoice || blockedContact(m.envelope?.header?.author))
+    return;
   const room =
       state.dms.find((r) => r.id === activeVoice) ??
       state.guilds.flatMap((g) => g.channels).find((r) => r.id === activeVoice),
@@ -2138,8 +2373,9 @@ async function handleSignal(m) {
     Math.abs(Date.now() - m.envelope.header.at) > 60000
   )
     return;
-  const entry = await createPeer(author),
-    pc = entry.pc;
+  const entry = await createPeer(author);
+  if (!entry) return;
+  const pc = entry.pc;
   if (payload.description) {
     if (
       payload.description.type === "offer" &&
@@ -2356,6 +2592,9 @@ const settingsUI = createSettings({
   newChannel,
   editChannel: (r, onSaved) => workspaceUI.channelDialog({ room: r, onSaved }),
   approveDialog,
+  leaveGuild,
+  deleteAccount: deleteAccountDialog,
+  setBlocked,
   getState: () => state,
   getMe: () => me,
   getGuild: currentGuild,
@@ -2382,7 +2621,7 @@ const communityUI = createCommunityUI({
   avatar,
   memberDialog,
   getUser: (id) => users.get(id),
-  getMessages: projection,
+  getMessages: () => projection().filter((m) => !blockedUser(m.author)),
   unpin: (m) => sendPayload({ type: "pin", target: m.id, on: false }),
   jumpToMessage: async (id) => {
     await loadHistory(roomId);
@@ -2420,6 +2659,7 @@ const workspaceUI = createWorkspaceUI({
   serverSettings: () => settingsUI.server(),
   closeSettings: () => settingsUI.close(),
   invite: inviteDialog,
+  leaveGuild,
   newDM,
   createGuild,
   markRead: (id) => {
@@ -2799,16 +3039,24 @@ window.addEventListener("beforeunload", () => {
   localStream?.getTracks().forEach((t) => t.stop());
   videoTrack?.stop();
 });
-if (
-  location.hash.startsWith("#invite=") ||
-  location.hash.startsWith("#join=")
-) {
-  try {
-    pendingInvite = parseInvite(new URL(location.href));
-  } catch {
-    toast("招待リンクの形式が不正");
+function readInviteLocation() {
+  pendingInvite = null;
+  if (
+    location.hash.startsWith("#invite=") ||
+    location.hash.startsWith("#join=")
+  ) {
+    try {
+      pendingInvite = parseInvite(new URL(location.href));
+    } catch {
+      toast("招待リンクの形式が不正");
+    }
   }
 }
+readInviteLocation();
+window.addEventListener("hashchange", () => {
+  readInviteLocation();
+  if (pendingInvite && me) guard(() => acceptInvite(pendingInvite));
+});
 
 async function resumeAccount() {
   const submit = $("#auth-submit");

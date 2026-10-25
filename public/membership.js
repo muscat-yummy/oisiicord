@@ -107,12 +107,14 @@ export async function validateCertificate(
     throw Error("所有者の証明が不正");
   const seen = new Set(members.map((m) => m.id));
   if (seen.size !== members.length) throw Error("メンバー証明が重複している");
-  for (const record of certificate.admissions ?? []) {
+  let inviteCutoff = 0;
+  async function add(record) {
     if (
       record.grant.guild !== base.guild ||
       record.grant.owner !== base.owner ||
       record.grant.baseVersion !== base.version ||
       record.grant.approval ||
+      record.grant.created <= inviteCutoff ||
       !(await verifyGrant(record.grant, record.grantSignature, ownerKeys)) ||
       !(await verifyAdmission(record)) ||
       seen.has(record.admission.user)
@@ -125,8 +127,74 @@ export async function validateCertificate(
       role: "member",
     });
   }
+  for (const record of certificate.admissions ?? []) await add(record);
+  const nonces = new Set();
+  for (const change of certificate.changes ?? []) {
+    if (change.type === "admission") {
+      await add(change.record);
+      continue;
+    }
+    if (change.type !== "departure") throw Error("メンバー変更が不正");
+    const proof = change.proof,
+      member = members.find((m) => m.id === proof?.user);
+    if (
+      !member ||
+      member.role === "owner" ||
+      nonces.has(proof.nonce) ||
+      !(await verifyDeparture(proof, change.signature, member.keys, base))
+    )
+      throw Error("退出証明が不正");
+    nonces.add(proof.nonce);
+    members.splice(members.indexOf(member), 1);
+    seen.delete(member.id);
+    inviteCutoff = Math.max(inviteCutoff, proof.at);
+  }
   if (members.length > 100) throw Error("メンバーの上限を超えている");
-  return { ...base, version: certificate.version, members };
+  return { ...base, version: certificate.version, members, inviteCutoff };
+}
+export function departureCheckpoint(
+  certificate,
+  previous = /** @type {any} */ (null),
+) {
+  const baseVersion = certificate.baseRoster.version;
+  const nonces = (certificate.changes ?? [])
+    .filter((change) => change.type === "departure")
+    .map((change) => change.proof.nonce);
+  if (
+    previous &&
+    (previous.baseVersion > baseVersion ||
+      (previous.baseVersion === baseVersion &&
+        previous.nonces.some((nonce) => !nonces.includes(nonce))))
+  )
+    throw Error("退出情報の巻き戻しを検知");
+  return { baseVersion, nonces };
+}
+export function departure(guild, user, baseVersion) {
+  return {
+    v: 1,
+    type: "departure",
+    guild,
+    user,
+    baseVersion,
+    at: Date.now(),
+    nonce: crypto.randomUUID(),
+  };
+}
+export async function verifyDeparture(proof, signature, keys, base) {
+  return (
+    !!proof &&
+    proof.v === 1 &&
+    proof.type === "departure" &&
+    proof.guild === base.guild &&
+    proof.baseVersion === base.version &&
+    proof.user !== base.owner &&
+    typeof proof.user === "string" &&
+    Number.isSafeInteger(proof.at) &&
+    proof.at > 0 &&
+    typeof proof.nonce === "string" &&
+    /^[a-zA-Z0-9_-]{1,100}$/.test(proof.nonce) &&
+    (await C.verify(proof, signature, keys))
+  );
 }
 export async function grantExchange(grant) {
   const key = await subtle.importKey(
@@ -200,7 +268,8 @@ export async function wrapHistoryKeys(
     if (
       expected &&
       (grant.guild !== expected.guild ||
-        grant.baseVersion !== expected.baseVersion)
+        grant.baseVersion !== expected.baseVersion ||
+        grant.created <= (expected.inviteCutoff ?? 0))
     )
       throw Error("招待のサーバーまたはメンバー証明が一致しない");
     if (!(await verifyGrant(grant, invite.signature, ownerKeys)))

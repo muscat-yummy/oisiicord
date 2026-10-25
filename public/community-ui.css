@@ -629,3 +629,23 @@ button.mention:hover {
 .history-status[hidden] {
   display: none;
 }
+
+.blocked-message {
+  display: block;
+  margin: 10px 24px;
+  padding: 8px 12px;
+  background: var(--panel);
+  color: var(--muted);
+  font-size: 12px;
+  border-radius: 6px;
+}
+#modal .workspace-editor label:has(input[type="checkbox"]) {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+.workspace-editor input[type="checkbox"] {
+  width: 18px;
+  height: 18px;
+  flex: none;
+}

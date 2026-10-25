@@ -1,0 +1,21 @@
+[
+  {
+    "sheet": "lifecycle-01.jpg",
+    "screens": [
+      "lifecycle-block-confirmation.png",
+      "lifecycle-blocked-chat.png",
+      "lifecycle-blocked-dm.png",
+      "lifecycle-blocked-settings-mobile.png",
+      "lifecycle-blocked-settings.png",
+      "lifecycle-delete-confirmation.png"
+    ]
+  },
+  {
+    "sheet": "lifecycle-02.jpg",
+    "screens": [
+      "lifecycle-deleted-user-history.png",
+      "lifecycle-leave-confirmation.png",
+      "lifecycle-rejoined-history.png"
+    ]
+  }
+]
