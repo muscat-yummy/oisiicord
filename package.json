@@ -27,7 +27,8 @@
     "test:lifecycle": "bun tests/lifecycle-interface.mjs",
     "test:files:live": "bun tests/files-live.mjs",
     "test:markdown": "bun tests/markdown-interface.mjs",
-    "test:responsive": "bun tests/responsive-interface.mjs"
+    "test:responsive": "bun tests/responsive-interface.mjs",
+    "test:motion": "bun tests/panel-motion-interface.mjs"
   },
   "devDependencies": {
     "@types/bun": "^1.3.0",

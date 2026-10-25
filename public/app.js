@@ -3050,15 +3050,67 @@ const toolbarControls = [
   $("#pins"),
   $("#search"),
 ];
-const moreTools = button(
-  "",
-  () => {
-    const toolbar = $("#mobile-toolbar");
-    toolbar.hidden = !toolbar.hidden;
-    moreTools.setAttribute("aria-expanded", String(!toolbar.hidden));
-  },
-  "icon-button",
-);
+let toolbarOpen = false,
+  toolbarMotion = null;
+function setToolbar(open, animate = true) {
+  const toolbar = $("#mobile-toolbar");
+  if (open === toolbarOpen && !toolbarMotion) {
+    toolbar.hidden = !open;
+    moreTools.setAttribute("aria-expanded", String(open));
+    return;
+  }
+  const style = getComputedStyle(toolbar);
+  const paddingTop = toolbar.hidden ? "0px" : style.paddingTop;
+  const paddingBottom = toolbar.hidden ? "0px" : style.paddingBottom;
+  const borderBottomWidth = toolbar.hidden ? "0px" : style.borderBottomWidth;
+  const before = toolbar.hidden ? 0 : toolbar.getBoundingClientRect().height;
+  const opacity = toolbar.hidden
+    ? 0
+    : Number(getComputedStyle(toolbar).opacity);
+  toolbarMotion?.cancel();
+  toolbarMotion = null;
+  toolbarOpen = open;
+  moreTools.setAttribute("aria-expanded", String(open));
+  if (
+    !animate ||
+    preferences().reducedMotion ||
+    matchMedia("(prefers-reduced-motion: reduce)").matches ||
+    !compactLayout.matches
+  ) {
+    toolbar.hidden = !open;
+    return;
+  }
+  toolbar.hidden = false;
+  const height = toolbar.getBoundingClientRect().height;
+  const motion = toolbar.animate(
+    [
+      {
+        height: before + "px",
+        opacity,
+        paddingTop,
+        paddingBottom,
+        borderBottomWidth,
+      },
+      {
+        height: (open ? height : 0) + "px",
+        opacity: open ? 1 : 0,
+        paddingTop: open ? "8px" : "0px",
+        paddingBottom: open ? "8px" : "0px",
+        borderBottomWidth: open ? "1px" : "0px",
+      },
+    ],
+    { duration: 180, easing: "cubic-bezier(.2,.8,.2,1)" },
+  );
+  toolbarMotion = motion;
+  motion.finished
+    .then(() => {
+      if (toolbarMotion !== motion) return;
+      toolbar.hidden = !open;
+      toolbarMotion = null;
+    })
+    .catch(() => {});
+}
+const moreTools = button("", () => setToolbar(!toolbarOpen), "icon-button");
 moreTools.id = "mobile-tools";
 moreTools.setAttribute("aria-label", "会話のツール");
 moreTools.setAttribute("aria-controls", "mobile-toolbar");
@@ -3072,8 +3124,15 @@ function closeSidePanels() {
 }
 function syncPanels() {
   const workspace = $("#workspace");
-  const membersVisible =
-    getComputedStyle($("#members-panel")).display !== "none";
+  const membersVisible = overlayMembers.matches
+    ? workspace.classList.contains("show-members") &&
+      !workspace.classList.contains("members-hidden")
+    : !workspace.classList.contains("members-hidden");
+  $("#members-panel").inert = !membersVisible;
+  $(".sidebar").inert =
+    compactLayout.matches && !workspace.classList.contains("show-sidebar");
+  $(".rail").inert =
+    compactLayout.matches && !workspace.classList.contains("show-sidebar");
   $("#toggle-members").setAttribute("aria-pressed", String(membersVisible));
   $("#mobile-channels").setAttribute(
     "aria-expanded",
@@ -3100,7 +3159,7 @@ const membersHeading = node(
 $("#members-panel").prepend(membersHeading);
 $("#panel-backdrop").onclick = closeSidePanels;
 $("#toggle-members").onclick = () => {
-  const visible = getComputedStyle($("#members-panel")).display !== "none";
+  const visible = $("#toggle-members").getAttribute("aria-pressed") === "true";
   $("#workspace").classList.remove("show-sidebar");
   $("#workspace").classList.toggle("members-hidden", visible);
   $("#workspace").classList.toggle("show-members", !visible);
@@ -3119,8 +3178,7 @@ function responsiveLayout() {
       control,
       compactLayout.matches ? null : $("#toggle-members"),
     );
-  $("#mobile-toolbar").hidden = true;
-  moreTools.setAttribute("aria-expanded", "false");
+  setToolbar(false, false);
   closeSidePanels();
 }
 compactLayout.addEventListener("change", responsiveLayout);
@@ -3129,8 +3187,7 @@ responsiveLayout();
 document.addEventListener("keydown", (event) => {
   if (event.key === "Escape") {
     closeSidePanels();
-    $("#mobile-toolbar").hidden = true;
-    moreTools.setAttribute("aria-expanded", "false");
+    setToolbar(false);
   }
 });
 function updateViewport() {
