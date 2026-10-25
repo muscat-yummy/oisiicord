@@ -2,7 +2,10 @@
 <html lang="ja">
   <head>
     <meta charset="UTF-8" />
-    <meta name="viewport" content="width=device-width,initial-scale=1" />
+    <meta
+      name="viewport"
+      content="width=device-width,initial-scale=1,viewport-fit=cover,interactive-widget=resizes-content"
+    />
     <meta name="theme-color" content="#202024" />
     <title>Oisiicord</title>
     <link rel="icon" href="/app-icon" />
@@ -14,6 +17,7 @@
     <link rel="stylesheet" href="/workspace-ui.css" />
     <link rel="stylesheet" href="/productivity.css" />
     <link rel="stylesheet" href="/developer-ui.css" />
+    <link rel="stylesheet" href="/responsive.css" />
     <script type="module" src="/app.js"></script>
   </head>
   <body>
@@ -64,6 +68,11 @@
       </div>
     </section>
     <div id="workspace" class="workspace" hidden>
+      <button
+        id="panel-backdrop"
+        aria-label="サイドパネルを閉じる"
+        hidden
+      ></button>
       <nav class="rail" aria-label="サーバー">
         <button id="home" class="rail-item logo" title="ダイレクトメッセージ">
           <img src="/app-icon" alt="DM" width="30" height="30" />
@@ -176,6 +185,7 @@
             />
           </div>
         </header>
+        <div id="mobile-toolbar" hidden></div>
         <div
           id="network-status"
           class="network-status"

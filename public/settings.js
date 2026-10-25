@@ -169,7 +169,8 @@ export function createSettings(ctx) {
       for (const item of nav.querySelectorAll("[data-tab]"))
         item.hidden = !item.textContent.includes(query);
     };
-    nav.append(search);
+    const tabs = n("div", { class: "settings-tabs" });
+    nav.append(search, tabs);
     for (const [key, label, ic] of items) {
       if (
         mode === "server" &&
@@ -179,10 +180,10 @@ export function createSettings(ctx) {
         continue;
       const el = action(label, () => navigate(key), ic);
       el.dataset.tab = key;
-      nav.append(el);
+      tabs.append(el);
     }
     if (mode === "user")
-      nav.append(
+      tabs.append(
         n("div", { class: "settings-nav-divider" }),
         action(
           "ログアウト",
@@ -195,7 +196,7 @@ export function createSettings(ctx) {
         ),
       );
     else if (ctx.getGuild().owner === ctx.getMe().id)
-      nav.append(
+      tabs.append(
         n("div", { class: "settings-nav-divider" }),
         action(
           "サーバーを削除",
@@ -215,7 +216,7 @@ export function createSettings(ctx) {
         ),
       );
     if (mode === "server" && ctx.getGuild().owner !== ctx.getMe().id)
-      nav.append(
+      tabs.append(
         action(
           "サーバーから退出",
           () => ctx.leaveGuild(ctx.getGuild()),

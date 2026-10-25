@@ -593,6 +593,7 @@ async function selectGuild(id) {
   if (sending) throw Error("送信が完了してからチャンネルを変更して");
   guildId = id;
   roomId = defaultRoom(currentGuild());
+  closeSidePanels();
   reply = null;
   $("#search").value = "";
   clearComposer();
@@ -609,7 +610,7 @@ async function selectRoom(id) {
   $("#search").value = "";
   unread.delete(id);
   clearComposer();
-  $("#workspace").classList.remove("show-sidebar");
+  closeSidePanels();
   renderNav();
   renderMembers();
   await loadHistory(id);
@@ -2907,6 +2908,7 @@ $("#home").onclick = () =>
     if (sending) throw Error("送信が完了してからチャンネルを変更して");
     guildId = null;
     roomId = null;
+    closeSidePanels();
     clearComposer();
     renderNav();
     renderMembers();
@@ -3040,14 +3042,113 @@ $("#message-input").addEventListener("blur", () =>
 );
 $("#search").oninput = renderMessages;
 $("#pins").onclick = () => communityUI.pins({ anchor: $("#pins") });
+const compactLayout = matchMedia("(max-width: 780px)");
+const overlayMembers = matchMedia("(max-width: 1200px)");
+const toolbarControls = [
+  $("#call"),
+  $("#personal-tools"),
+  $("#pins"),
+  $("#search"),
+];
+const moreTools = button(
+  "",
+  () => {
+    const toolbar = $("#mobile-toolbar");
+    toolbar.hidden = !toolbar.hidden;
+    moreTools.setAttribute("aria-expanded", String(!toolbar.hidden));
+  },
+  "icon-button",
+);
+moreTools.id = "mobile-tools";
+moreTools.setAttribute("aria-label", "会話のツール");
+moreTools.setAttribute("aria-controls", "mobile-toolbar");
+moreTools.setAttribute("aria-expanded", "false");
+moreTools.append(icon("chevron", 22));
+$(".tools").append(moreTools);
+function closeSidePanels() {
+  $("#workspace").classList.remove("show-sidebar", "show-members");
+  if (overlayMembers.matches) $("#workspace").classList.add("members-hidden");
+  syncPanels();
+}
+function syncPanels() {
+  const workspace = $("#workspace");
+  const membersVisible =
+    getComputedStyle($("#members-panel")).display !== "none";
+  $("#toggle-members").setAttribute("aria-pressed", String(membersVisible));
+  $("#mobile-channels").setAttribute(
+    "aria-expanded",
+    String(workspace.classList.contains("show-sidebar")),
+  );
+  $("#panel-backdrop").hidden = !(
+    (compactLayout.matches && workspace.classList.contains("show-sidebar")) ||
+    (overlayMembers.matches && membersVisible)
+  );
+}
+const sidebarClose = button("", closeSidePanels, "icon-button panel-close");
+sidebarClose.setAttribute("aria-label", "チャンネルを閉じる");
+sidebarClose.append(icon("close", 22));
+$(".side-header").append(sidebarClose);
+const membersClose = button("", closeSidePanels, "icon-button panel-close");
+membersClose.setAttribute("aria-label", "メンバーを閉じる");
+membersClose.append(icon("close", 22));
+const membersHeading = node(
+  "header",
+  { class: "members-heading" },
+  $("#members-panel h2"),
+  membersClose,
+);
+$("#members-panel").prepend(membersHeading);
+$("#panel-backdrop").onclick = closeSidePanels;
 $("#toggle-members").onclick = () => {
   const visible = getComputedStyle($("#members-panel")).display !== "none";
+  $("#workspace").classList.remove("show-sidebar");
   $("#workspace").classList.toggle("members-hidden", visible);
   $("#workspace").classList.toggle("show-members", !visible);
-  $("#toggle-members").setAttribute("aria-pressed", String(!visible));
+  syncPanels();
 };
-$("#mobile-channels").onclick = () =>
-  $("#workspace").classList.toggle("show-sidebar");
+$("#mobile-channels").onclick = () => {
+  const open = !$("#workspace").classList.contains("show-sidebar");
+  closeSidePanels();
+  $("#workspace").classList.toggle("show-sidebar", open);
+  syncPanels();
+};
+function responsiveLayout() {
+  const parent = compactLayout.matches ? $("#mobile-toolbar") : $(".tools");
+  for (const control of toolbarControls)
+    parent.insertBefore(
+      control,
+      compactLayout.matches ? null : $("#toggle-members"),
+    );
+  $("#mobile-toolbar").hidden = true;
+  moreTools.setAttribute("aria-expanded", "false");
+  closeSidePanels();
+}
+compactLayout.addEventListener("change", responsiveLayout);
+overlayMembers.addEventListener("change", syncPanels);
+responsiveLayout();
+document.addEventListener("keydown", (event) => {
+  if (event.key === "Escape") {
+    closeSidePanels();
+    $("#mobile-toolbar").hidden = true;
+    moreTools.setAttribute("aria-expanded", "false");
+  }
+});
+function updateViewport() {
+  const viewport = window.visualViewport;
+  if (viewport && viewport.scale !== 1) return;
+  const style = document.documentElement.style;
+  style.setProperty(
+    "--viewport-height",
+    (viewport?.height ?? innerHeight) + "px",
+  );
+  style.setProperty("--viewport-width", (viewport?.width ?? innerWidth) + "px");
+  style.setProperty("--viewport-top", (viewport?.offsetTop ?? 0) + "px");
+  style.setProperty("--viewport-left", (viewport?.offsetLeft ?? 0) + "px");
+}
+window.visualViewport?.addEventListener("resize", updateViewport);
+window.visualViewport?.addEventListener("scroll", updateViewport);
+window.addEventListener("resize", updateViewport);
+updateViewport();
 $("#modal-close").onclick = () => $("#modal").close();
 $("#modal-cancel").onclick = () => $("#modal").close();
 $("#call").onclick = () => guard(() => joinVoice(roomId));

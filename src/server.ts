@@ -1357,6 +1357,7 @@ export function createApp(
           "/community-ui.css": "community-ui.css",
           "/community-settings.css": "community-settings.css",
           "/shell.css": "shell.css",
+          "/responsive.css": "responsive.css",
           "/style.css": "style.css",
           "/icon.svg": "icon.svg",
           "/manifest.webmanifest": "manifest.webmanifest",
