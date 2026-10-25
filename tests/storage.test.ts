@@ -242,7 +242,7 @@ function git(root: string, ...args: string[]) {
   if (r.exitCode) throw Error(r.stderr.toString());
   return r.stdout.toString().trim();
 }
-test("git update backs up data and preserves local host configuration; edited source is refused", () => {
+test("git update ignores edited env example, preserves host configuration and refuses edited source", () => {
   const base = directory(),
     remote = join(base, "upstream"),
     root = join(base, "installed"),
@@ -257,6 +257,7 @@ test("git update backs up data and preserves local host configuration; edited so
   );
   writeFileSync(join(remote, ".gitignore"), ".env\ndata/\nnode_modules/\n");
   writeFileSync(join(remote, "revision.txt"), "old");
+  writeFileSync(join(remote, ".env.example"), "PORT=3000\n");
   git(remote, "add", ".");
   git(remote, "commit", "-m", "old");
   git(base, "clone", "--local", remote, root);
@@ -270,9 +271,13 @@ test("git update backs up data and preserves local host configuration; edited so
   writeFileSync(join(remote, "revision.txt"), "new");
   git(remote, "add", ".");
   git(remote, "commit", "-m", "new");
+  writeFileSync(join(root, ".env.example"), "PORT=9876\n");
+  git(root, "add", ".env.example");
   const result = updateProject(root, paths);
   expect(readFileSync(join(root, "revision.txt"), "utf8")).toBe("new");
   expect(readFileSync(join(root, ".env"), "utf8")).toContain("PORT=4567");
+  expect(readFileSync(join(root, ".env.example"), "utf8")).toBe("PORT=9876\n");
+  expect(git(root, "diff", "--cached", "--name-only")).toBe(".env.example");
   expect(result.backup).not.toBe(null);
   const check = new Database(result.backup!, { readonly: true });
   expect(scalar(check, "SELECT username FROM users")).toBe("alice");

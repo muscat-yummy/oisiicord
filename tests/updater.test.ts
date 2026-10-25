@@ -193,3 +193,35 @@ test("ZIP updates preserve host-written changelog and beta settings even when th
   );
   expect(readFileSync(join(root, "settings", "beta.json"), "utf8")).toBe(beta);
 });
+
+test("ZIP updates ignore edited env examples from old manifests and keep the local file", async () => {
+  const { root, storage } = setup(),
+    revision = "f".repeat(40);
+  const old = "PORT=3000\n",
+    current = "PORT=8765\n";
+  writeFileSync(join(root, ".env.example"), current);
+  writeFileSync(
+    join(root, ".oisiicord-update.json"),
+    JSON.stringify({
+      revision: "a".repeat(40),
+      files: {
+        ".env.example": new Bun.CryptoHasher("sha256")
+          .update(old)
+          .digest("hex"),
+      },
+    }),
+  );
+  await updateArchive(root, {
+    storage,
+    fetcher: fetcher(
+      revision,
+      await archive(revision, { ".env.example": "PORT=9999\n" }),
+    ),
+  });
+  expect(readFileSync(join(root, ".env.example"), "utf8")).toBe(current);
+  expect(
+    JSON.parse(readFileSync(join(root, ".oisiicord-update.json"), "utf8"))
+      .files,
+  ).not.toHaveProperty(".env.example");
+  expect(readFileSync(join(root, ".env"), "utf8")).toBe("PORT=4000\n");
+});

@@ -28,14 +28,21 @@ export function updateProject(root = projectRoot, storage?: Storage) {
     throw Error("リポジトリの直下で更新して");
   if (command(["git", "branch", "--show-current"], root, true) !== "main")
     throw Error("main ブランチで更新して");
-  if (
-    command(
-      ["git", "status", "--porcelain", "--untracked-files=no"],
-      root,
-      true,
-    )
-  )
-    throw Error("変更したソースがあるため更新を停止した。先にコミットして");
+  const changed = command(
+    [
+      "git",
+      "status",
+      "--porcelain",
+      "--untracked-files=no",
+      "--",
+      ".",
+      ":(top,exclude,literal).env.example",
+    ],
+    root,
+    true,
+  );
+  if (changed)
+    throw Error("変更したソースがあるため更新を停止した:\n" + changed);
   command(["git", "fetch", "origin", "main"], root);
   command(
     ["git", "merge-base", "--is-ancestor", "HEAD", "FETCH_HEAD"],

@@ -34,7 +34,6 @@ const managed = (path: string) =>
     "LICENSE.md",
     "tsconfig.json",
     ".gitignore",
-    ".env.example",
   ].includes(path);
 
 function destination(root: string, path: string) {
@@ -116,6 +115,7 @@ export async function updateArchive(
     return { updated: false, revision, backup: null, sourceBackup: null };
   if (previous)
     for (const [path, expected] of Object.entries(previous.files)) {
+      if (path === ".env.example") continue;
       const target = destination(root, path);
       if (!existsSync(target) || hash(readFileSync(target)) !== expected)
         throw Error("変更したソースがあるため更新を停止した: " + path);
@@ -181,7 +181,11 @@ export async function updateArchive(
     );
     mkdirSync(sourceBackup, { recursive: true, mode: 0o700 });
     const affected = [
-      ...new Set([...files.keys(), ...Object.keys(previous?.files ?? {})]),
+      ...new Set(
+        [...files.keys(), ...Object.keys(previous?.files ?? {})].filter(
+          (path) => path !== ".env.example",
+        ),
+      ),
     ];
     const originals = new Set<string>();
     for (const path of affected) {
