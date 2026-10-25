@@ -298,7 +298,14 @@ async function refreshState() {
   state = next;
   renderTyping();
   for (const id of [...peers.keys()]) if (blockedContact(id)) removePeer(id);
-  if (activeVoice && state.unavailableDMs?.includes(activeVoice))
+  if (
+    activeVoice &&
+    (state.unavailableDMs?.includes(activeVoice) ||
+      (!state.dms.some((room) => room.id === activeVoice) &&
+        !state.guilds.some((guild) =>
+          guild.channels.some((room) => room.id === activeVoice),
+        )))
+  )
     await leaveVoice();
   saveTrust();
   if (guildId && !currentGuild()) {
