@@ -1,4 +1,8 @@
 const paths = {
+  code: ["m8 6-6 6 6 6M18 6l6 6-6 6M15 3 11 23"],
+  wrap: ["M3 6h20M3 12h14a4 4 0 0 1 0 8h-5m3-3-3 3 3 3M3 18h4"],
+  expand: ["M3 10V3h7M16 3h7v7M3 16v7h7M23 16v7h-7"],
+  diagram: ["M9 2h8v6H9zM2 18h8v6H2zM16 18h8v6h-8zM13 8v5M6 18v-5h14v5"],
   notebook: ["M5 3h16v20H5V3ZM2 7h6M2 12h6M2 17h6M11 8h6M11 12h6M11 16h4"],
   folder: ["M3 5h7l2 3h11v13H3V5Z"],
   book: ["M3 4h8l2 2 2-2h8v17h-8l-2 2-2-2H3V4ZM13 6v17"],

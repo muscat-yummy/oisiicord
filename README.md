@@ -1,6 +1,6 @@
 # Oisiicord
 
-Bun・SQLite・Web Crypto・WebSocket で動く、Discord 風の会話アプリ。ランタイム依存パッケージなし。Docker 不要。
+Bun・SQLite・Web Crypto・WebSocket で動く、Discord 風の会話アプリ。Docker 不要。
 
 ## 起動
 
@@ -203,3 +203,20 @@ bun run backup
 入力欄で `<` を打つとリンクボタン、サーバーのカスタム絵文字、定型文の候補を開く。上下キーで移動し、Enter・Tab・クリックで挿入、Escで閉じる。リンクボタンはURLと名前を入力して作成する。クリック時のURL確認は維持する。
 
 `bun run test:productivity` で入力候補、URL確認、メモ・定型文・下書きの保存と復元、モバイル表示を確認する。
+
+## コード・Mermaid・添付プレビュー
+
+メッセージを言語名付きのコードフェンスで囲むと、言語の色分け、コピー、折り返しを使える。`json` のブロックには整形・圧縮もある。コード内のメンションやリンクは文字列として表示する。
+
+コードフェンスの言語を `mermaid` にすると図へ変換する。コードへの切り替え、拡大、SVG保存に対応する。`<` の入力候補からもコードやMermaidの入力画面を開ける。Mermaid内の設定変更、HTMLラベル、クリックによる外部リンクやスクリプトは無効。構文エラー時は元のコードを表示する。
+
+自分用ツールの「変換」で、JSON整形・圧縮、UTF-8のBase64、URLエンコード・デコード、SHA-256を使える。コードの実行機能はない。
+
+PNG・JPEG・GIF・WebP・BMP、MP4・WebM・Ogg動画をチャット内でプレビューする。添付全体を取得して復号・改変検証した後に表示し、動画は自動再生しない。画像はクリックで拡大でき、元ファイルの保存もできる。SVGや対応外形式は保存操作を使う。動画のコーデック対応はブラウザに依存する。インライン画像は32メガピクセルまで、復号したプレビューの保持は最大64 MiB。
+
+Mermaidとhighlight.jsはバージョンを固定して同梱の依存関係から自分のサーバーが配信する。CDNや外部の図変換サービスに本文を送らない。Mermaidは図が見えるとき、色分けはコードがあるときに必要なライブラリを読み込む。起動前に通常どおり `bun install --frozen-lockfile` を実行する。手動のビルド工程は不要。
+
+`bun run test:developer` は図・SVG保存・コード表示・変換・画像拡大・動画再生・改変拒否・ログアウト時のプレビュー破棄をローカルの模擬添付APIで確認する。
+
+- [Mermaid の利用方法](https://mermaid.js.org/config/usage.html)
+- [highlight.js API](https://highlightjs.readthedocs.io/en/latest/api.html)

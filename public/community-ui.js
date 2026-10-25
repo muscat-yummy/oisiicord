@@ -1,3 +1,5 @@
+import { messageBlocks, inlineCode } from "./developer-format.js";
+import { createDeveloperUI } from "./developer-ui.js";
 import { mentions } from "./mentions.js";
 import { icon } from "./icons.js";
 
@@ -212,7 +214,7 @@ export function createCommunityUI(ctx) {
     }
     el.append(document.createTextNode(text.slice(start)));
   }
-  function richText(text) {
+  function plainRichText(text) {
     const el = n("div", { class: "message-text" });
     const pattern =
       /<button:([^<>]+)>|<:([a-zA-Z0-9_-]{1,100}):>|(:[A-Za-z0-9_]{2,32}:)|https?:\/\/[^\s<>]+/g;
@@ -253,6 +255,27 @@ export function createCommunityUI(ctx) {
     }
     appendMentions(el, source.slice(start));
     return el;
+  }
+  const developer = createDeveloperUI(ctx);
+  function richText(text) {
+    const root = n("div", { class: "message-text" });
+    for (const block of messageBlocks(text)) {
+      if (block.type === "code") {
+        root.append(developer.codeBlock(block.text, block.language));
+        continue;
+      }
+      const prose = n("div", { class: "rich-prose" });
+      for (const part of inlineCode(block.text)) {
+        if (part.type === "code")
+          prose.append(n("code", { class: "inline-code" }, part.text));
+        else {
+          const fragment = plainRichText(part.text);
+          prose.append(...fragment.childNodes);
+        }
+      }
+      root.append(prose);
+    }
+    return root;
   }
   function emojiPicker({ anchor, onSelect, mode = "insert" } = {}) {
     closePicker();

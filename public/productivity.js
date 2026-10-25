@@ -1,3 +1,4 @@
+import { transformText } from "./developer-format.js";
 import { icon } from "./icons.js";
 import {
   createPersonalStore,
@@ -152,6 +153,7 @@ export function createProductivity(ctx) {
       ["notes", "メモ", "notebook"],
       ["templates", "定型文", "copy"],
       ["drafts", "下書き", "edit"],
+      ["convert", "変換", "code"],
     ]) {
       const tab = b(
         "",
@@ -171,6 +173,7 @@ export function createProductivity(ctx) {
     if (activeTab === "notes") renderNotes(body);
     if (activeTab === "templates") renderTemplates(body);
     if (activeTab === "drafts") renderDrafts(body);
+    if (activeTab === "convert") renderConverter(body);
   }
   function renderNotes(body) {
     const available = rooms();
@@ -333,6 +336,68 @@ export function createProductivity(ctx) {
     );
     name.focus();
   }
+  function renderConverter(body) {
+    const type = n(
+      "select",
+      { "aria-label": "変換方法" },
+      ...[
+        ["json", "JSON整形"],
+        ["compact", "JSON圧縮"],
+        ["base64-encode", "Base64エンコード"],
+        ["base64-decode", "Base64デコード"],
+        ["url-encode", "URLエンコード"],
+        ["url-decode", "URLデコード"],
+        ["sha256", "SHA-256"],
+      ].map(([value, label]) => n("option", { value }, label)),
+    );
+    const source = n("textarea", {
+        rows: 5,
+        maxlength: 100000,
+        "aria-label": "変換するテキスト",
+        placeholder: "入力",
+      }),
+      result = n("textarea", {
+        rows: 5,
+        readonly: true,
+        "aria-label": "変換結果",
+        placeholder: "結果",
+      }),
+      error = n("p", { class: "error", "aria-live": "polite" });
+    body.append(
+      n(
+        "div",
+        { class: "personal-converter" },
+        type,
+        source,
+        n(
+          "div",
+          { class: "personal-converter-actions" },
+          b(
+            "変換",
+            async () => {
+              try {
+                result.value = await transformText(source.value, type.value);
+                error.textContent = "";
+              } catch {
+                error.textContent = "入力の形式を確認して";
+              }
+            },
+            "primary",
+          ),
+        ),
+        error,
+        result,
+        n(
+          "div",
+          { class: "personal-converter-actions" },
+          b("結果をコピー", async () => {
+            await navigator.clipboard.writeText(result.value);
+            toast("コピーした");
+          }),
+        ),
+      ),
+    );
+  }
   function renderDrafts(body) {
     const available = rooms(),
       items = [...ctx.drafts.entries()].filter(
@@ -431,6 +496,20 @@ export function createProductivity(ctx) {
         glyph: "link",
         kind: "button",
       },
+      {
+        name: "Mermaid図",
+        detail: "図のコードを挿入",
+        search: "mermaid 図",
+        glyph: "diagram",
+        kind: "mermaid",
+      },
+      {
+        name: "コードブロック",
+        detail: "言語を指定して挿入",
+        search: "code コード",
+        glyph: "code",
+        kind: "code",
+      },
       ...(ctx.getGuild()?.emojis ?? []).map((e) => ({
         name: ":" + e.name + ":",
         detail: "カスタム絵文字",
@@ -486,7 +565,42 @@ export function createProductivity(ctx) {
       at = range;
     if (!option || !at) return;
     closeCandidates();
-    if (option.kind === "button") {
+    if (option.kind === "code" || option.kind === "mermaid") {
+      const language = n(
+        "select",
+        { "aria-label": "コードの言語" },
+        ...[
+          "text",
+          "js",
+          "ts",
+          "python",
+          "bash",
+          "json",
+          "sql",
+          "rust",
+          "go",
+          "mermaid",
+        ].map((value) => n("option", { value }, value)),
+      );
+      language.value = option.kind === "mermaid" ? "mermaid" : "js";
+      const source = n(
+        "textarea",
+        { rows: 8, maxlength: 7800, "aria-label": "コードの本文" },
+        option.kind === "mermaid" ? "flowchart LR\n  A --> B" : "",
+      );
+      modal(
+        "コードを挿入",
+        n(
+          "div",
+          { class: "workspace-editor" },
+          n("label", {}, "言語", language),
+          n("label", {}, "コード", source),
+        ),
+        () =>
+          insert("```" + language.value + "\n" + source.value + "\n```", at),
+        "挿入",
+      );
+    } else if (option.kind === "button") {
       const url = n("input", {
           type: "url",
           required: true,

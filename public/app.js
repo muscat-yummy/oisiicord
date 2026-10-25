@@ -11,6 +11,8 @@ import { createCommunityUI } from "./community-ui.js";
 import * as M from "./membership.js";
 import { createWorkspaceUI } from "./workspace-ui.js";
 import { createProductivity } from "./productivity.js";
+import { createMediaPreview } from "./media-preview.js";
+import { clearDeveloperCaches } from "./developer-ui.js";
 import { rememberLogin, restoreLogin, forgetLogin } from "./login-state.js";
 import { isMentioned, shouldNotify, createMentionInput } from "./mentions.js";
 const $ = (s) => document.querySelector(s);
@@ -971,6 +973,11 @@ function renderMessages() {
     content.append(text);
     if (!m.invalid && !m.deleted) {
       for (const f of m.files ?? []) {
+        const preview = mediaPreview.card(f, m.id);
+        if (preview) {
+          content.append(preview);
+          continue;
+        }
         const file = node(
           "div",
           { class: "file-card" },
@@ -1721,6 +1728,8 @@ async function logout(revoked = false) {
   for (const cached of imageCache.values())
     cached.then((url) => URL.revokeObjectURL(url)).catch(() => {});
   imageCache.clear();
+  mediaPreview.clear();
+  clearDeveloperCaches();
   histories.clear();
   drafts.clear();
   attachments = [];
@@ -2249,6 +2258,12 @@ const settingsUI = createSettings({
   getRoom: currentRoom,
   getUser: (id) => users.get(id),
 });
+const mediaPreview = createMediaPreview({
+  node,
+  button,
+  download: downloadFile,
+  formatSize,
+});
 const communityUI = createCommunityUI({
   node,
   button,
@@ -2390,7 +2405,7 @@ for (const [id, name, label] of [
   ["mobile-channels", "menu", "チャンネルを表示"],
   ["call", "phone", "音声通話"],
   ["pins", "pin", "ピン留め"],
-  ["personal-tools", "notebook", "メモ・定型文・下書き"],
+  ["personal-tools", "notebook", "メモ・定型文・下書き・変換"],
   ["toggle-members", "users", "メンバー"],
   ["attach", "plusCircle", "ファイルを添付"],
   ["emoji", "smile", "絵文字"],

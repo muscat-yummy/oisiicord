@@ -2,6 +2,7 @@ import { database } from "./db";
 import { prepareStorage, projectRoot } from "./storage";
 import { createCommunity } from "./community";
 import { createInvitations } from "./invitations";
+import { createVendor } from "./vendor";
 import { createBranding } from "./branding";
 import { canonical, verify, fingerprint } from "../public/crypto.js";
 import { resolve } from "node:path";
@@ -387,6 +388,7 @@ export function createApp(
     ensureMembershipLimit: community.ensureMembershipLimit,
   });
   const branding = createBranding(projectRoot, common);
+  const vendor = createVendor(projectRoot, common, origin);
   function sessionData(uid: string, tokenHash: string, expires: number) {
     const row = one("SELECT salt,vault FROM users WHERE id=?", uid)!;
     return {
@@ -1253,6 +1255,8 @@ export function createApp(
     async fetch(req, server) {
       try {
         const url = new URL(req.url);
+        const dependency = await vendor(req, url);
+        if (dependency) return dependency;
         const branded = await branding(req, url);
         if (branded) return branded;
         if (url.pathname.startsWith("/api/") || url.pathname === "/ws")
@@ -1274,6 +1278,10 @@ export function createApp(
           "/changelog.js": "changelog.js",
           "/productivity.js": "productivity.js",
           "/personal-store.js": "personal-store.js",
+          "/developer-format.js": "developer-format.js",
+          "/developer-ui.js": "developer-ui.js",
+          "/developer-ui.css": "developer-ui.css",
+          "/media-preview.js": "media-preview.js",
           "/productivity.css": "productivity.css",
           "/workspace-ui.css": "workspace-ui.css",
           "/community-ui.css": "community-ui.css",

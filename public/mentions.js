@@ -1,3 +1,4 @@
+import { codeRanges } from "./developer-format.js";
 // Mentions remain in the signed, encrypted message text.
 const tokenPattern = /<@(&?)([\w-]{1,100})>|(?<![\w@])@everyone\b/g;
 export function mentions(text) {
@@ -5,6 +6,7 @@ export function mentions(text) {
   const links = [
     ...source.matchAll(/<button:[^<>]+>|https?:\/\/[^\s<>]+/g),
   ].map((m) => [m.index, m.index + m[0].length]);
+  links.push(...codeRanges(source));
   return [...source.matchAll(tokenPattern)]
     .filter(
       (m) => !links.some(([start, end]) => m.index >= start && m.index < end),
