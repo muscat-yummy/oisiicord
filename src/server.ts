@@ -46,8 +46,21 @@ export function createApp(
   const env = { ...process.env, ...storage?.env };
   const databasePath = options.path ?? storage!.databasePath;
   const db = database(databasePath, storage?.backupDir);
-  const origin = options.origin ?? env.APP_ORIGIN ?? "http://localhost:3000";
-  const site = new URL(origin);
+  const site = new URL(
+    options.origin ?? env.APP_ORIGIN ?? "http://localhost:3000",
+  );
+  if (
+    !["http:", "https:"].includes(site.protocol) ||
+    site.username ||
+    site.password ||
+    site.pathname !== "/" ||
+    site.search ||
+    site.hash
+  )
+    throw Error(
+      "APP_ORIGINにはパスを含めず、https://ドメイン:ポートの形式で指定してください",
+    );
+  const origin = site.origin;
   if (
     site.protocol !== "https:" &&
     !["localhost", "127.0.0.1", "[::1]"].includes(site.hostname)
@@ -491,7 +504,8 @@ export function createApp(
       method = req.method,
       ip = server.requestIP(req)?.address ?? "unknown";
     if ((method !== "GET" && method !== "HEAD") || p === "/ws")
-      if (req.headers.get("origin") !== origin) fail(403, "Originが一致しない");
+      if (req.headers.get("origin") !== origin)
+        fail(403, "アクセス先とサーバーの公開URL設定が一致しません");
     if (p === "/api/health") return response({ ok: true });
     if (p === "/api/auth/salt" && method === "GET") {
       limit("salt:" + ip, 30);
