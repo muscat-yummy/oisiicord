@@ -31,6 +31,17 @@ test("beta defaults, exact codes, live settings, invalid configuration and exist
       writeFileSync(path, JSON.stringify({ beta_mode, code: value }));
       expect(read().required).toBe(required);
     }
+    const bomCode = " 日本語-" + code + " ";
+    const json = JSON.stringify({ beta_mode: true, code: bomCode });
+    const le = Buffer.from("\ufeff" + json, "utf16le");
+    const be = Buffer.from(le);
+    be.swap16();
+    for (const data of [Buffer.from("\ufeff" + json, "utf8"), le, be]) {
+      writeFileSync(path, data);
+      expect(read()).toEqual({ required: true, code: bomCode });
+      expect(readFileSync(path)).toEqual(data);
+    }
+    writeFileSync(path, JSON.stringify({ beta_mode: true, code }));
     createBetaSettings(dir);
     expect(read().code).toBe(code);
     expect(matchesBetaCode(code, code)).toBe(true);
@@ -71,7 +82,7 @@ test("registration enforces beta codes through the API without exposing them or 
   }
   try {
     const code = crypto.randomUUID();
-    writeFileSync(path, JSON.stringify({ beta_mode: true, code }));
+    writeFileSync(path, "\ufeff" + JSON.stringify({ beta_mode: true, code }));
     const policy = await request("/api/auth/registration");
     expect(await policy.json()).toEqual({ inviteRequired: true });
     expect(policy.headers.get("cache-control")).toBe("no-store");
@@ -101,7 +112,12 @@ test("registration enforces beta codes through the API without exposing them or 
       inviteCode: code,
     });
     expect(registered.status).toBe(200);
-    writeFileSync(path, "{");
+    writeFileSync(path, '{"beta_mode":true,"code":"' + code + '",}');
+    const failed = await request("/api/auth/registration");
+    expect(failed.status).toBe(503);
+    const diagnostic = await failed.text();
+    expect(diagnostic).toContain("JSON形式");
+    expect(diagnostic).not.toContain(code);
     expect((await request("/api/auth/register", payload)).status).toBe(503);
     expect((await request("/api/auth/login", { username, auth })).status).toBe(
       200,

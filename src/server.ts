@@ -6,7 +6,7 @@ import { createLifecycle } from "./lifecycle";
 import { createFileAdapter, FileServiceError } from "./file-adapter";
 import { createVendor } from "./vendor";
 import { createBranding } from "./branding";
-import { createBetaSettings, matchesBetaCode } from "./beta";
+import { createBetaSettings, matchesBetaCode, BetaSettingsError } from "./beta";
 import { createCommerce } from "./commerce";
 import { RateLimiter } from "./rate-limit";
 import { FileTransfers } from "./file-transfers";
@@ -81,8 +81,13 @@ export function createApp(
   function registrationPolicy() {
     try {
       return readBeta();
-    } catch {
-      return fail(503, "登録設定を読み込めません。管理者に連絡してください");
+    } catch (error) {
+      return fail(
+        503,
+        error instanceof BetaSettingsError
+          ? error.message
+          : "登録設定を読み込めません。管理者に連絡してください",
+      );
     }
   }
   function checkRegistrationCode(code: unknown) {
