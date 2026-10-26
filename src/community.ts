@@ -21,6 +21,8 @@ export const communityPermissions = [
 ] as const;
 export type CommunityPermission = (typeof communityPermissions)[number];
 type Context = {
+  userLimit?: (user: string) => number;
+  guildLimits?: (guild: string) => { emojiLimit: number };
   db: Database;
   one: (sql: string, ...args: any[]) => Row | undefined;
   all: (sql: string, ...args: any[]) => Row[];
@@ -230,9 +232,12 @@ export function createCommunity(ctx: Context) {
   function ensureMembershipLimit(user: string) {
     if (
       (one("SELECT COUNT(*) AS n FROM members WHERE user=?", user)?.n ?? 0) >=
-      30
+      (ctx.userLimit?.(user) ?? 30)
     )
-      return fail(409, "参加できるサーバーは30個までです");
+      return fail(
+        409,
+        `参加できるサーバーは${ctx.userLimit?.(user) ?? 30}個までです`,
+      );
   }
   function removeMember(guild: string, user: string) {
     run(
@@ -633,9 +638,12 @@ export function createCommunity(ctx: Context) {
           (one(
             "SELECT COUNT(*) AS n FROM community_emojis WHERE guild=?",
             guild,
-          )?.n ?? 0) >= 100
+          )?.n ?? 0) >= (ctx.guildLimits?.(guild).emojiLimit ?? 100)
         )
-          return fail(400, "絵文字は100個までです");
+          return fail(
+            400,
+            `絵文字は${ctx.guildLimits?.(guild).emojiLimit ?? 100}個までです`,
+          );
         if (
           one(
             "SELECT 1 FROM community_emojis WHERE guild=? AND name=? COLLATE NOCASE",

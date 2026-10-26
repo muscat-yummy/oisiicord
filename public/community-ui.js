@@ -128,14 +128,16 @@ export function createCommunityUI(ctx) {
     closePins();
   }
   function customEmojis() {
-    return ctx.getGuild()?.emojis ?? [];
+    return ctx.getState()?.benefits?.globalEmojis
+      ? ctx.getState().guilds.flatMap((g) => g.emojis ?? [])
+      : (ctx.getGuild()?.emojis ?? []);
   }
-  function emojiNode(token, size = 22) {
+  function emojiNode(token, size = 22, extra = []) {
     const match = String(token).match(/^<:([a-zA-Z0-9_-]{1,100}):>$/);
     if (!match && !/^:[A-Za-z0-9_]{2,32}:$/.test(String(token)))
       return n("span", { class: "unicode-emoji" }, String(token));
     const named = String(token).match(/^:([A-Za-z0-9_]{2,32}):$/);
-    const emoji = customEmojis().find((value) =>
+    const emoji = [...customEmojis(), ...extra].find((value) =>
       match
         ? value.id === match[1]
         : value.name.toLowerCase() === named?.[1].toLowerCase(),
@@ -186,7 +188,15 @@ export function createCommunityUI(ctx) {
         "div",
         { class: "link-confirmation" },
         n("strong", {}, url.hostname),
-        n("p", { class: "link-confirmation-url" }, url.href),
+        n("p", { class: "link-confirmation-url", dir: "ltr" }, url.href),
+        n(
+          "p",
+          {},
+          "外部サイトを開きます。ログイン情報を入力する前にURLを確認してください。アクセス先にはIPアドレスが伝わります。",
+        ),
+        url.protocol === "http:"
+          ? n("p", { class: "error" }, "この接続はHTTPSではありません。")
+          : null,
       ),
       () => {
         window.open(url.href, "_blank", "noopener,noreferrer");
@@ -215,7 +225,7 @@ export function createCommunityUI(ctx) {
     }
     el.append(document.createTextNode(text.slice(start)));
   }
-  function plainRichText(text) {
+  function plainRichText(text, extra = []) {
     const el = n("div", { class: "message-text" });
     const pattern =
       /<button:([^<>]+)>|<:([a-zA-Z0-9_-]{1,100}):>|(:[A-Za-z0-9_]{2,32}:)|https?:\/\/[^\s<>]+/g;
@@ -238,7 +248,8 @@ export function createCommunityUI(ctx) {
           link.title = url.href;
           el.append(link);
         }
-      } else if (match[2] || match[3]) el.append(emojiNode(match[0]));
+      } else if (match[2] || match[3])
+        el.append(emojiNode(match[0], 22, extra));
       else {
         const url = safeURL(match[0]);
         if (!url) el.append(document.createTextNode(match[0]));
@@ -258,16 +269,27 @@ export function createCommunityUI(ctx) {
     return el;
   }
   const developer = createDeveloperUI(ctx);
-  function richText(text) {
+  function richText(text, extra = []) {
+    extra = Array.isArray(extra)
+      ? extra
+          .filter(
+            (e) =>
+              e &&
+              typeof e.id === "string" &&
+              typeof e.name === "string" &&
+              e.image,
+          )
+          .slice(0, 20)
+      : [];
     const root = n("div", { class: "message-text" });
     root.classList.toggle(
       "emoji-only",
-      emojiOnlyCount(text, customEmojis()) > 0,
+      emojiOnlyCount(text, [...customEmojis(), ...extra]) > 0,
     );
     function inline(parent, tokens) {
       for (const token of tokens) {
         if (token.type === "text")
-          parent.append(...plainRichText(token.text).childNodes);
+          parent.append(...plainRichText(token.text, extra).childNodes);
         else if (token.type === "literal")
           parent.append(document.createTextNode(token.text));
         else if (token.type === "code")
@@ -559,7 +581,7 @@ export function createCommunityUI(ctx) {
           ),
         ),
       );
-      card.append(richText(message.text));
+      card.append(richText(message.text, message.emojis));
       if (message.files?.length)
         card.append(n("small", {}, "添付 " + message.files.length + "件"));
       const actions = n(

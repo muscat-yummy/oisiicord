@@ -33,6 +33,7 @@ export function mediaMime(file) {
   return aliases[mime] ?? mime;
 }
 export function previewKind(file) {
+  if (file?.v === 2) return null;
   const mime = mediaMime(file);
   return [
     "image/png",

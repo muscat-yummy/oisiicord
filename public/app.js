@@ -1,4 +1,10 @@
 import * as C from "./crypto.js";
+import {
+  MAX_FILE_SIZE,
+  uploadAttachment,
+  removeAttachment,
+  streamDownload,
+} from "./attachments.js";
 import { icon, setIcon } from "./icons.js";
 import {
   preferences,
@@ -189,26 +195,56 @@ async function validateRoster(roster, signature, ownerKeys) {
     throw Error("所有者の公開鍵が不正");
   return roster;
 }
-const historyCredentials = new Map(),
+const credentialRevisions = new Map(),
+  historyCredentials = new Map(),
   credentialGenerations = new Map();
 function invalidateCredentials(gid) {
   credentialGenerations.set(gid, (credentialGenerations.get(gid) ?? 0) + 1);
   historyCredentials.delete(gid);
+  credentialRevisions.delete(gid);
 }
-async function loadHistoryCredentials(gid) {
-  if (historyCredentials.has(gid)) return historyCredentials.get(gid);
+async function loadHistoryCredentials(gid, ownerKeys = null, revision = null) {
+  if (
+    revision !== null &&
+    historyCredentials.has(gid) &&
+    credentialRevisions.get(gid) === revision
+  )
+    return historyCredentials.get(gid);
+  // Fetch when another device or member has delivered new encrypted keys.
   const generation = credentialGenerations.get(gid) ?? 0;
   const envelopes = await api("/guilds/" + gid + "/history-credentials"),
     credentials = [];
   for (const envelope of envelopes) {
-    const credential = await M.readCredential(envelope, me);
+    let credential;
+    try {
+      credential = await M.readCredential(
+        envelope,
+        me,
+        users.get(envelope.header.author)?.keys ?? me.keys,
+        ownerKeys,
+      );
+    } catch (error) {
+      if (envelope.header.author === me.id) throw error;
+      continue;
+    }
     if (credential.grant.guild !== gid)
       throw Error("履歴のサーバーが一致しない");
+    if (credentials.some((c) => c.grant.id === credential.grant.id)) continue;
     credentials.push(credential);
+    if (envelope.header.author !== me.id)
+      await api("/guilds/" + gid + "/history-credentials", {
+        invite: credential.grant.id,
+        envelope: await M.shareCredential(
+          credential,
+          { id: me.id, keys: me.keys },
+          me,
+        ),
+      }).catch(() => {});
   }
   if (generation !== (credentialGenerations.get(gid) ?? 0))
-    return loadHistoryCredentials(gid);
+    return loadHistoryCredentials(gid, ownerKeys, revision);
   historyCredentials.set(gid, credentials);
+  credentialRevisions.set(gid, revision);
   return credentials;
 }
 let refreshing = null,
@@ -277,7 +313,14 @@ async function refreshState() {
       }
       storage.versions[g.id] = g.version;
       (storage.baseVersions ??= {})[g.id] = base.version;
-      await loadHistoryCredentials(g.id);
+      const priorCredentials = historyCredentials.get(g.id)?.length ?? 0;
+      await loadHistoryCredentials(
+        g.id,
+        owner.keys,
+        g.historyCredentialVersion,
+      );
+      if ((historyCredentials.get(g.id)?.length ?? 0) > priorCredentials)
+        for (const channel of g.channels) histories.delete(channel.id);
       accepted.push(g);
     } catch (e) {
       toast("サーバーを無効化: " + e.message);
@@ -296,6 +339,20 @@ async function refreshState() {
   }
   next.dms = acceptedDMs;
   state = next;
+  for (const g of state.guilds)
+    for (const target of g.historyRecipients ?? []) {
+      if (target === me.id) continue;
+      const recipient = g.roster.members.find((m) => m.id === target);
+      if (!recipient) continue;
+      for (const credential of historyCredentials.get(g.id) ?? [])
+        if (credential.grant.publicAlias) {
+          api("/guilds/" + g.id + "/history-credentials", {
+            invite: credential.grant.id,
+            target,
+            envelope: await M.shareCredential(credential, recipient, me),
+          }).catch(() => {});
+        }
+    }
   renderTyping();
   for (const id of [...peers.keys()]) if (blockedContact(id)) removePeer(id);
   if (
@@ -796,6 +853,7 @@ function projection() {
         ...e,
         text: p.text,
         files: p.files,
+        emojis: Array.isArray(p.emojis) ? p.emojis.slice(0, 20) : [],
         reply: p.reply,
         reactions: {},
         pinned: false,
@@ -833,8 +891,8 @@ function projection() {
   }
   return [...messages.values()].filter((message) => !message.deleted);
 }
-function richText(s) {
-  return communityUI.richText(s);
+function richText(s, emojis = []) {
+  return communityUI.richText(s, emojis);
 }
 function hasPermission(permission, g = currentGuild()) {
   return !g || g.owner === me.id || !!g.myPermissions?.[permission];
@@ -1068,7 +1126,7 @@ function renderMessages() {
         m.invalid ? node("span", { class: "error" }, "検証失敗") : null,
       ),
     );
-    const text = richText(m.text);
+    const text = richText(m.text, m.emojis);
     if (m.deleted) text.classList.add("deleted");
     if (m.edited) text.append(node("span", { class: "edited" }, "編集済み"));
     content.append(text);
@@ -1228,21 +1286,43 @@ async function sendMessage(e) {
   input.disabled = true;
   const uploaded = [],
     pendingFiles = [...attachments];
+  const uploadProgress = node("span", {
+    class: "attachment-chip",
+    role: "status",
+  });
+  if (pendingFiles.length) $("#attachment-list").append(uploadProgress);
   let sendAttempted = false;
   try {
     for (const f of pendingFiles) {
-      const { ciphertext, descriptor } = await C.encryptFile(f);
-      const res = await fetch("/api/files", {
-        method: "POST",
-        headers: { "Content-Type": "application/octet-stream" },
-        body: ciphertext,
-      });
-      const result = await res.json();
-      if (!res.ok) throw Error(result.error);
-      uploaded.push({ ...descriptor, ...result });
+      uploaded.push(
+        await uploadAttachment(f, {
+          progress: (bytes, total) => {
+            uploadProgress.textContent =
+              f.name +
+              " · " +
+              Math.floor((bytes / Math.max(1, total)) * 100) +
+              "%";
+          },
+        }),
+      );
     }
     sendAttempted = true;
-    await sendPayload({ type: "message", text, files: uploaded, reply });
+    await sendPayload({
+      type: "message",
+      text,
+      files: uploaded,
+      reply,
+      emojis: (state.benefits?.globalEmojis
+        ? state.guilds.flatMap((g) => g.emojis ?? [])
+        : (currentGuild()?.emojis ?? [])
+      )
+        .filter(
+          (e) =>
+            text.includes("<:" + e.id + ":>") ||
+            text.includes(":" + e.name + ":"),
+        )
+        .slice(0, 20),
+    });
     input.value = "";
     mentionInput.close();
     input.style.height = "";
@@ -1254,16 +1334,13 @@ async function sendMessage(e) {
   } catch (error) {
     // An interrupted POST may already be committed; never remove its attachments blindly.
     if (!sendAttempted)
-      for (const f of uploaded)
-        await api(
-          "/files/" + f.id,
-          { password: f.removePassword },
-          "DELETE",
-        ).catch(() => {});
+      for (const f of uploaded) await removeAttachment(f).catch(() => {});
     throw error;
   } finally {
     sending = false;
+    uploadProgress.remove();
     $("#send").disabled = false;
+    setIcon($("#send"), "send", "送信");
     $("#attach").disabled = false;
     input.disabled = false;
     renderChannelAccess();
@@ -1271,6 +1348,14 @@ async function sendMessage(e) {
   }
 }
 async function downloadFile(f) {
+  if (f.v === 2) {
+    toast("添付を取得・検証中");
+    await streamDownload(f, (bytes, total) =>
+      toast("添付を取得・検証中 " + Math.floor((bytes / total) * 100) + "%"),
+    );
+    $("#toast").hidden = true;
+    return;
+  }
   if (!/^[\w-]{1,100}$/.test(f.id)) throw Error("添付IDが不正");
   toast("添付を取得・検証中");
   const res = await fetch("/api/files/" + f.id);
@@ -1319,8 +1404,10 @@ function prompt(title, label, value, submit, buttonLabel = "保存") {
   modal(title, f.node, () => submit(f.input.value), buttonLabel);
 }
 async function createGuild() {
-  if (state.guilds.length >= 30)
-    throw Error("参加できるサーバーは30個までです");
+  if (state.guilds.length >= (state.benefits?.guildLimit ?? 30))
+    throw Error(
+      `参加できるサーバーは${state.benefits?.guildLimit ?? 30}個までです`,
+    );
   prompt(
     "サーバーを作成",
     "サーバー名",
@@ -1389,10 +1476,28 @@ async function inviteDialog(onCreated) {
   const g = currentGuild(),
     expiry = node("select", { "aria-label": "有効期限" }),
     uses = node("select", { "aria-label": "利用回数" }),
+    alias = node("input", {
+      "aria-label": "カスタムURL",
+      placeholder: "test",
+      pattern: "[a-z0-9][a-z0-9-]{1,30}[a-z0-9]",
+      maxlength: 32,
+    }),
     approval = node("input", {
       type: "checkbox",
       "aria-label": "参加に承認が必要",
     });
+  alias.oninput = () => {
+    const custom = !!alias.value;
+    approval.disabled = custom;
+    if (custom) {
+      approval.checked = false;
+      expiry.value = "0";
+      uses.value = "0";
+    }
+    if (approval.closest("label")) approval.closest("label").hidden = custom;
+    expiry.disabled = custom;
+    uses.disabled = custom;
+  };
   for (const [value, label] of [
     [3600, "1時間"],
     [86400, "24時間"],
@@ -1410,6 +1515,13 @@ async function inviteDialog(onCreated) {
         generate.disabled = true;
         generate.textContent = "リンクを作成中…";
         try {
+          if (
+            alias.value &&
+            !/^[a-z0-9][a-z0-9-]{1,30}[a-z0-9]$/.test(alias.value)
+          )
+            throw Error(
+              "カスタムURLは半角英小文字・数字・-の3〜32文字で指定してください",
+            );
           const events = [];
           for (const room of g.channels.filter((r) => r.kind !== "voice")) {
             for (let page = 0; page < 100; page++) {
@@ -1436,17 +1548,32 @@ async function inviteDialog(onCreated) {
                 guild: g.id,
                 owner: g.owner,
                 baseVersion: (g.certificate?.baseRoster ?? g.roster).version,
-                expires: seconds ? Date.now() + seconds * 1000 : null,
-                maxUses: Number(uses.value),
-                approval: approval.checked,
+                expires: alias.value
+                  ? null
+                  : seconds
+                    ? Date.now() + seconds * 1000
+                    : null,
+                maxUses: alias.value ? 0 : Number(uses.value),
+                approval: alias.value ? false : approval.checked,
+                ...(alias.value
+                  ? { publicAlias: alias.value.trim().toLowerCase() }
+                  : {}),
                 history,
               },
               me,
             ),
             { secret, ...published } = created;
           await api("/guilds/" + g.id + "/invitations", published);
-          const url =
-            location.origin + "/#join=" + created.grant.id + "." + secret;
+          if (alias.value) {
+            await api("/guilds/" + g.id + "/history-credentials", {
+              invite: created.grant.id,
+              envelope: await M.createCredential(created, secret, me),
+            });
+            invalidateCredentials(g.id);
+          }
+          const url = alias.value
+            ? location.origin + "/" + created.grant.publicAlias
+            : location.origin + "/#join=" + created.grant.id + "." + secret;
           result.replaceChildren(
             node("input", {
               readonly: true,
@@ -1497,6 +1624,7 @@ async function inviteDialog(onCreated) {
         node("label", {}, "有効期限", expiry),
         node("label", {}, "利用回数", uses),
       ),
+      node("label", {}, "カスタムURL（任意）", alias),
       node("label", { class: "invite-approval" }, approval, "参加に承認が必要"),
       generate,
       result,
@@ -1504,10 +1632,17 @@ async function inviteDialog(onCreated) {
   );
 }
 async function acceptInvite(data) {
+  if (data?.alias) {
+    const resolved = await api(
+      "/invite-aliases/" + encodeURIComponent(data.alias),
+    );
+    data = { short: true, id: resolved.id, publicAlias: resolved.publicAlias };
+  }
   if (data?.short) {
     const invite = await api("/invitations/" + data.id),
       owner = invite.guild;
     if (
+      (data.publicAlias && invite.grant.publicAlias !== data.publicAlias) ||
       invite.grant.guild !== owner.id ||
       invite.grant.owner !== owner.owner ||
       !(await M.verifyGrant(invite.grant, invite.signature, owner.keys))
@@ -1525,18 +1660,25 @@ async function acceptInvite(data) {
       ),
       async () => {
         const proof = await M.admit(invite, data.secret, me),
-          credential = await M.createCredential(invite, data.secret, me),
+          credential = invite.grant.publicAlias
+            ? null
+            : await M.createCredential(invite, data.secret, me),
           joined = await api("/invitations/" + data.id + "/join", proof);
-        await api("/guilds/" + owner.id + "/history-credentials", {
-          invite: data.id,
-          envelope: credential,
-        });
+        if (credential)
+          await api("/guilds/" + owner.id + "/history-credentials", {
+            invite: data.id,
+            envelope: credential,
+          });
         invalidateCredentials(owner.id);
         for (const r of state.guilds.find((g) => g.id === owner.id)?.channels ??
           [])
           histories.delete(r.id);
         pendingInvite = null;
-        history.replaceState(null, "", location.pathname + location.search);
+        history.replaceState(
+          null,
+          "",
+          invite.grant.publicAlias ? "/" : location.pathname + location.search,
+        );
         await refresh();
         if (!joined.approval) await selectGuild(owner.id);
         else toast("参加申請を送信した");
@@ -1893,12 +2035,9 @@ async function deleteMessage(m, skipConfirmation = false) {
   const remove = async () => {
     await sendPayload({ type: "delete", target: m.id });
     for (const f of m.files ?? [])
-      if (f.removePassword)
-        await api(
-          "/files/" + f.id,
-          { password: f.removePassword },
-          "DELETE",
-        ).catch(() => toast("外部APIで添付の削除に失敗した"));
+      await removeAttachment(f).catch(() =>
+        toast("外部APIで添付の削除に失敗した"),
+      );
   };
   if (skipConfirmation) return remove();
   modal(
@@ -1996,6 +2135,7 @@ async function logout(revoked = false) {
   guildId = null;
   roomId = null;
   historyCredentials.clear();
+  credentialRevisions.clear();
   credentialGenerations.clear();
   unread.clear();
   mentionInput.close();
@@ -2579,6 +2719,7 @@ function toggleMute() {
   sound(preferences().muted ? "mute" : "unmute");
 }
 const settingsUI = createSettings({
+  confirmLink: (url) => communityUI.confirmLink(url),
   node,
   button,
   api,
@@ -2983,7 +3124,7 @@ $("#file-input").onchange = () =>
     const files = [...$("#file-input").files];
     if (attachments.length + files.length > 5) throw Error("添付は5個まで");
     for (const f of files)
-      if (f.size > 25 * 1024 * 1024) throw Error("1ファイル25 MiBまで");
+      if (f.size > MAX_FILE_SIZE) throw Error("1ファイル2048 MiBまで");
     attachments.push(...files);
     $("#file-input").value = "";
     renderAttachments();
@@ -3221,7 +3362,9 @@ window.addEventListener("beforeunload", () => {
   videoTrack?.stop();
 });
 function readInviteLocation() {
-  pendingInvite = null;
+  pendingInvite = /^\/[a-z0-9][a-z0-9-]{1,30}[a-z0-9]$/.test(location.pathname)
+    ? { alias: location.pathname.slice(1) }
+    : null;
   if (
     location.hash.startsWith("#invite=") ||
     location.hash.startsWith("#join=")
@@ -3261,3 +3404,20 @@ async function resumeAccount() {
   }
 }
 resumeAccount();
+
+// Cover external anchors introduced by profile, settings or future renderers as well.
+document.addEventListener(
+  "click",
+  (event) => {
+    const anchor = event.target.closest?.("a[href]");
+    if (!anchor || anchor.hasAttribute("download")) return;
+    try {
+      const url = new URL(anchor.href, location.href);
+      if (!["http:", "https:"].includes(url.protocol)) return;
+      event.preventDefault();
+      event.stopImmediatePropagation();
+      communityUI.confirmLink(url.href);
+    } catch {}
+  },
+  true,
+);

@@ -28,6 +28,12 @@ async function inviteIdentity(grant, secret) {
 export function validGrant(grant) {
   return (
     !!grant &&
+    (grant.publicAlias === undefined ||
+      (typeof grant.publicAlias === "string" &&
+        /^[a-z0-9][a-z0-9-]{1,30}[a-z0-9]$/.test(grant.publicAlias) &&
+        !grant.approval &&
+        !grant.maxUses &&
+        grant.expires === null)) &&
     grant.v === 1 &&
     grant.type === "invite" &&
     /^[A-Za-z0-9_-]{16}$/.test(grant.id) &&
@@ -70,6 +76,8 @@ export async function verifyAdmission(record) {
       (grant.expires !== null && admission.at >= grant.expires)
     )
       return false;
+    if (grant.publicAlias)
+      return await C.verify(admission, record.signature, admission.keys);
     const key = await subtle.importKey(
       "jwk",
       grant.publicKey,
@@ -149,7 +157,7 @@ export async function validateCertificate(
     seen.delete(member.id);
     inviteCutoff = Math.max(inviteCutoff, proof.at);
   }
-  if (members.length > 100) throw Error("メンバーの上限を超えている");
+  if (members.length > 300) throw Error("メンバーの上限を超えている");
   return { ...base, version: certificate.version, members, inviteCutoff };
 }
 export function departureCheckpoint(
@@ -227,6 +235,7 @@ export async function createGrant(options, me) {
     maxUses: options.maxUses ?? 0,
     approval: options.approval ?? false,
     historyHash: "",
+    ...(options.publicAlias ? { publicAlias: options.publicAlias } : {}),
   };
   const snapshot = await C.lock(
     C.unb64(await C.digest(secret)),
@@ -250,7 +259,9 @@ export async function admit(invite, secret, me) {
     admission,
     signature: await C.sign(
       admission,
-      await inviteIdentity(invite.grant, secret),
+      invite.grant.publicAlias
+        ? me
+        : await inviteIdentity(invite.grant, secret),
     ),
   };
 }
@@ -355,7 +366,14 @@ export async function createCredential(invite, secret, me) {
   );
   if (!Array.isArray(history)) throw Error("招待の履歴が不正");
   return C.seal(
-    { type: "history-credential", grant: invite.grant, secret, history },
+    {
+      type: "history-credential",
+      grant: invite.grant,
+      grantSignature: invite.signature,
+      ...(invite.grant.publicAlias ? { snapshot: invite.snapshot } : {}),
+      secret,
+      history: invite.grant.publicAlias ? [] : history,
+    },
     {
       room: "history:" + invite.grant.guild,
       author: me.id,
@@ -364,8 +382,13 @@ export async function createCredential(invite, secret, me) {
     },
   );
 }
-export async function readCredential(envelope, me) {
-  const payload = await C.open(envelope, me, me.keys, envelope.header.room);
+export async function readCredential(
+  envelope,
+  me,
+  authorKeys = me.keys,
+  ownerKeys = null,
+) {
+  const payload = await C.open(envelope, me, authorKeys, envelope.header.room);
   if (
     payload.type !== "history-credential" ||
     envelope.header.room !== "history:" + payload.grant.guild ||
@@ -373,7 +396,33 @@ export async function readCredential(envelope, me) {
     !Array.isArray(payload.history)
   )
     throw Error("履歴の鍵が不正");
-  const entries = payload.history.map((entry) => {
+  if (
+    envelope.header.author !== me.id &&
+    (!ownerKeys ||
+      !payload.grantSignature ||
+      !(await verifyGrant(payload.grant, payload.grantSignature, ownerKeys)))
+  )
+    throw Error("履歴共有の招待署名が不正");
+  let history = payload.history;
+  if (envelope.header.author !== me.id || payload.snapshot) {
+    if (
+      !payload.snapshot ||
+      (await C.digest(C.canonical(payload.snapshot))) !==
+        payload.grant.historyHash
+    )
+      throw Error("履歴共有の内容が一致しない");
+    history = JSON.parse(
+      decode.decode(
+        await C.unlock(
+          C.unb64(await C.digest(payload.secret)),
+          payload.snapshot,
+          aad(payload.grant),
+        ),
+      ),
+    );
+    if (!Array.isArray(history)) throw Error("履歴の鍵が不正");
+  }
+  const entries = history.map((entry) => {
     if (
       !entry ||
       typeof entry.id !== "string" ||
@@ -386,7 +435,38 @@ export async function readCredential(envelope, me) {
   });
   return {
     grant: payload.grant,
+    secret: payload.secret,
+    grantSignature: payload.grantSignature,
+    snapshot: payload.snapshot,
     identity: await inviteIdentity(payload.grant, payload.secret),
     history: new Map(entries),
   };
+}
+
+export async function shareCredential(credential, recipient, me) {
+  return C.seal(
+    {
+      type: "history-credential",
+      grant: credential.grant,
+      grantSignature: credential.grantSignature,
+      snapshot: credential.snapshot,
+      secret: credential.secret,
+      history: credential.snapshot
+        ? []
+        : [...credential.history].map(([path, key]) => {
+            const split = path.indexOf("/");
+            return {
+              room: path.slice(0, split),
+              id: path.slice(split + 1),
+              key,
+            };
+          }),
+    },
+    {
+      room: "history:" + credential.grant.guild,
+      author: me.id,
+      recipients: [recipient],
+      identity: me,
+    },
+  );
 }

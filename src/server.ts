@@ -7,6 +7,8 @@ import { createFileAdapter, FileServiceError } from "./file-adapter";
 import { createVendor } from "./vendor";
 import { createBranding } from "./branding";
 import { createBetaSettings, matchesBetaCode } from "./beta";
+import { createCommerce } from "./commerce";
+import { RateLimiter } from "./rate-limit";
 import { canonical, verify, fingerprint } from "../public/crypto.js";
 import { resolve, join } from "node:path";
 
@@ -25,6 +27,7 @@ class HttpError extends Error {
   constructor(
     public status: number,
     message: string,
+    public retryAfter?: number,
   ) {
     super(message);
   }
@@ -40,6 +43,8 @@ export function createApp(
     hostname?: string;
     fileOrigin?: string;
     settingsDirectory?: string;
+    paymentFetch?: typeof fetch;
+    allowLocalPaymentProvider?: boolean;
   } = {},
 ) {
   const storage = options.path === undefined ? prepareStorage() : undefined;
@@ -85,24 +90,44 @@ export function createApp(
       fail(403, "招待コードが正しくありません");
   }
   const sockets = new Set<Bun.ServerWebSocket<WSData>>();
-  const buckets = new Map<string, { n: number; reset: number }>();
+  const limiter = new RateLimiter();
+  const transfers = new Map<string, number>();
+  let activeTransfers = 0;
+  async function transfer<T>(
+    uid: string,
+    action: () => Promise<T>,
+  ): Promise<T> {
+    const count = transfers.get(uid) ?? 0;
+    if (count >= 2 || activeTransfers >= 4)
+      throw new HttpError(429, "添付の転送が混み合っています", 2);
+    transfers.set(uid, count + 1);
+    activeTransfers++;
+    try {
+      return await action();
+    } finally {
+      activeTransfers--;
+      const remaining = (transfers.get(uid) ?? 1) - 1;
+      if (remaining) transfers.set(uid, remaining);
+      else transfers.delete(uid);
+    }
+  }
   const one = (sql: string, ...args: any[]): Row | undefined =>
     db.query(sql).get(...args) as Row | undefined;
   const all = (sql: string, ...args: any[]): Row[] =>
     db.query(sql).all(...args) as Row[];
   const run = (sql: string, ...args: any[]) => db.query(sql).run(...args);
   function limit(key: string, max: number, window = 60000) {
-    const now = Date.now();
-    let b = buckets.get(key);
-    if (!b || b.reset < now) {
-      b = { n: 0, reset: now + window };
-      buckets.set(key, b);
-    }
-    if (++b.n > max) fail(429, "操作が多すぎる。しばらく待って再試行して");
+    const retry = limiter.consume(key, max, window);
+    if (retry)
+      throw new HttpError(
+        429,
+        `操作が多すぎます。${retry}秒後に再試行してください`,
+        retry,
+      );
   }
   const maintenance = setInterval(() => {
     const now = Date.now();
-    for (const [k, b] of buckets) if (b.reset < now) buckets.delete(k);
+    limiter.prune();
     run("DELETE FROM sessions WHERE expires < ?", now);
     for (const ws of sockets)
       if (!sessionValid(ws.data)) ws.close(4001, "Session expired");
@@ -354,7 +379,8 @@ export function createApp(
           "{}",
       ),
       ...community.state(g.id, uid),
-      ...invitations.state(g.id),
+      ...commerce.guildBenefits(g.id),
+      ...invitations.state(g.id, uid),
       channels: community.decorateChannels(g.id, channels(g.id)),
       requests:
         g.owner === uid
@@ -376,6 +402,7 @@ export function createApp(
     ]);
     return {
       ...lifecycle.state(uid),
+      benefits: commerce.benefits(uid),
       me: user(uid),
       guilds,
       dms,
@@ -415,6 +442,12 @@ export function createApp(
     status = 200,
     headers: Record<string, string> = {},
   ) => Response.json(value, { status, headers: { ...common, ...headers } });
+  const commerce = createCommerce(
+    { db, one, all, run, fail, response, json, limit, changed },
+    options.settingsDirectory ?? join(projectRoot, "settings"),
+    options.paymentFetch,
+    options.allowLocalPaymentProvider,
+  );
   const community = createCommunity({
     db,
     one,
@@ -426,6 +459,8 @@ export function createApp(
     text,
     changed,
     audit,
+    userLimit: (uid: string) => commerce.benefits(uid).guildLimit,
+    guildLimits: commerce.guildBenefits,
   });
   const invitations = createInvitations({
     db,
@@ -438,6 +473,7 @@ export function createApp(
     changed,
     audit,
     user,
+    memberLimit: (guild: string) => commerce.guildBenefits(guild).memberLimit,
     ensureMembershipLimit: (uid: string) => {
       if (lifecycle.deleted(uid)) fail(401, "ログインが必要");
       community.ensureMembershipLimit(uid);
@@ -501,8 +537,21 @@ export function createApp(
   }
   async function api(req: Request, url: URL, server: Bun.Server<WSData>) {
     const p = url.pathname,
-      method = req.method,
-      ip = server.requestIP(req)?.address ?? "unknown";
+      method = req.method;
+    let ip = server.requestIP(req)?.address ?? "unknown";
+    if (
+      env.TRUST_PROXY === "true" &&
+      ["127.0.0.1", "::1", "::ffff:127.0.0.1"].includes(ip)
+    ) {
+      const forwarded = req.headers
+        .get("x-forwarded-for")
+        ?.split(",")
+        .at(-1)
+        ?.trim();
+      if (forwarded && /^[a-fA-F0-9:.]{2,80}$/.test(forwarded)) ip = forwarded;
+    }
+    limit("requests:" + ip, 300);
+
     if ((method !== "GET" && method !== "HEAD") || p === "/ws")
       if (req.headers.get("origin") !== origin)
         fail(403, "アクセス先とサーバーの公開URL設定が一致しません");
@@ -516,6 +565,9 @@ export function createApp(
           sha("unknown/" + name).slice(0, 44),
       });
     }
+    const aliasMatch = p.match(/^\/api\/invite-aliases\/([a-z0-9-]{3,32})$/);
+    if (aliasMatch && method === "GET")
+      return response(invitations.resolveAlias(aliasMatch[1]));
     if (p === "/api/auth/registration" && method === "GET")
       return response({ inviteRequired: registrationPolicy().required });
     if (p === "/api/auth/register" && method === "POST") {
@@ -586,6 +638,8 @@ export function createApp(
     const session = auth(req),
       uid = session.user;
     limit("api:" + uid, 180);
+    const storeResponse = await commerce.handle(req, url, uid);
+    if (storeResponse) return storeResponse;
     const lifecycleResponse = await lifecycle.handle(req, url, uid);
     if (lifecycleResponse) return lifecycleResponse;
     const invitationResponse = await invitations.handle(req, url, uid);
@@ -962,7 +1016,11 @@ export function createApp(
           r.owner !== uid ||
           r.version !== g.version + 1 ||
           !Array.isArray(r.members) ||
-          r.members.length > 100 ||
+          r.members.length >
+            Math.max(
+              commerce.guildBenefits(gid).memberLimit,
+              all("SELECT user FROM members WHERE guild=?", gid).length,
+            ) ||
           !(await verify(r, b.signature, user(uid).keys))
         )
           fail(409, "メンバー更新署名またはバージョンが不正");
@@ -1073,7 +1131,10 @@ export function createApp(
         const b = await json(req);
         if (!["text", "voice", "announcement", "rules"].includes(b.kind))
           fail(400, "種類が不正");
-        if (all("SELECT id FROM rooms WHERE guild=?", gid).length >= 100)
+        if (
+          all("SELECT id FROM rooms WHERE guild=?", gid).length >=
+          commerce.guildBenefits(gid).channelLimit
+        )
           fail(400, "チャンネル上限");
         const id = uuid(),
           name = text(b.name, 60),
@@ -1199,7 +1260,8 @@ export function createApp(
       }
       if (m[2] === "events" && method === "POST") {
         limit("send:" + uid, 60);
-        const e = await json(req);
+        limit("send-burst:" + uid, 6, 5000);
+        const e = await json(req, 1024 * 1024);
         await validateEnvelope(e, r, uid);
         community.assertCanPost(r, uid, e.header.type ?? "message");
         try {
@@ -1266,18 +1328,23 @@ export function createApp(
       }
     }
     if (p === "/api/files" && method === "POST") {
-      limit("upload:" + uid, 8, 60000);
+      limit("upload:" + uid, 64, 60000);
       if (req.headers.get("content-type") !== "application/octet-stream")
         fail(415, "暗号化バイナリが必要");
-      const data = await bounded(req, 25 * 1024 * 1024 + 16);
-      return response(await files.upload(data));
+      return transfer(uid, async () => {
+        const data = await bounded(req, 25 * 1024 * 1024 + 16);
+        return response(await files.upload(data));
+      });
     }
     m = p.match(/^\/api\/files\/([a-zA-Z0-9_-]+)$/);
     if (m && method === "GET") {
-      limit("download:" + uid, 40);
-      const data = await files.download(m[1]);
-      return new Response(data, {
-        headers: { ...common, "Content-Type": "application/octet-stream" },
+      limit("download:" + uid, 128);
+      const id = m[1];
+      return transfer(uid, async () => {
+        const data = await files.download(id);
+        return new Response(data, {
+          headers: { ...common, "Content-Type": "application/octet-stream" },
+        });
       });
     }
     if (m && method === "DELETE") {
@@ -1335,6 +1402,8 @@ export function createApp(
           "/": "index.html",
           "/app.js": "app.js",
           "/crypto.js": "crypto.js",
+          "/attachments.js": "attachments.js",
+          "/download-worker.js": "download-worker.js",
           "/icons.js": "icons.js",
           "/preferences.js": "preferences.js",
           "/settings.js": "settings.js",
@@ -1362,7 +1431,19 @@ export function createApp(
           "/icon.svg": "icon.svg",
           "/manifest.webmanifest": "manifest.webmanifest",
         };
-        const file = allowed[url.pathname];
+        const file =
+          allowed[url.pathname] ??
+          (/^\/[a-z0-9][a-z0-9-]{1,30}[a-z0-9]$/.test(url.pathname) &&
+          (() => {
+            try {
+              invitations.resolveAlias(url.pathname.slice(1));
+              return true;
+            } catch {
+              return false;
+            }
+          })()
+            ? "index.html"
+            : undefined);
         if (!file) return response({ error: "Not found" }, 404);
         return new Response(
           Bun.file(resolve(import.meta.dir, "../public", file)),
@@ -1375,12 +1456,20 @@ export function createApp(
             e instanceof Error ? e.message : "unknown",
           );
         return response(
-          { error: e instanceof HttpError ? e.message : "サーバー処理に失敗" },
+          {
+            error: e instanceof HttpError ? e.message : "サーバー処理に失敗",
+            ...(e instanceof HttpError && e.retryAfter
+              ? { retryAfter: e.retryAfter }
+              : {}),
+          },
           e instanceof HttpError
             ? e.status
             : e instanceof FileServiceError
               ? 502
               : 500,
+          e instanceof HttpError && e.retryAfter
+            ? { "Retry-After": String(e.retryAfter) }
+            : {},
         );
       }
     },

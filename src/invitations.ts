@@ -11,6 +11,8 @@ CREATE TABLE IF NOT EXISTS guild_admissions(guild TEXT NOT NULL REFERENCES guild
 CREATE TABLE IF NOT EXISTS membership_certificates(guild TEXT NOT NULL REFERENCES guilds(id) ON DELETE CASCADE,version INTEGER NOT NULL,data TEXT NOT NULL,PRIMARY KEY(guild,version));
 CREATE TABLE IF NOT EXISTS history_credentials(guild TEXT NOT NULL REFERENCES guilds(id) ON DELETE CASCADE,user TEXT NOT NULL REFERENCES users(id),invite TEXT NOT NULL,envelope TEXT NOT NULL,PRIMARY KEY(guild,user,invite));
 CREATE TABLE IF NOT EXISTS guild_membership_changes(guild TEXT NOT NULL REFERENCES guilds(id) ON DELETE CASCADE,seq INTEGER NOT NULL,record TEXT NOT NULL,PRIMARY KEY(guild,seq));
+CREATE TABLE IF NOT EXISTS history_deliveries(guild TEXT NOT NULL REFERENCES guilds(id) ON DELETE CASCADE,user TEXT NOT NULL REFERENCES users(id),invite TEXT NOT NULL,sender TEXT NOT NULL REFERENCES users(id),envelope TEXT NOT NULL,PRIMARY KEY(guild,user,invite,sender));
+CREATE TABLE IF NOT EXISTS public_invite_aliases(slug TEXT PRIMARY KEY,guild TEXT NOT NULL UNIQUE REFERENCES guilds(id) ON DELETE CASCADE,invite TEXT NOT NULL REFERENCES invitation_grants(id));
 CREATE INDEX IF NOT EXISTS invitation_grants_guild ON invitation_grants(guild);`;
 type Context = {
   db: any;
@@ -23,8 +25,24 @@ type Context = {
   changed: (guild: string) => void;
   audit: (guild: string, uid: string, action: string, target?: string) => void;
   user: (uid: string) => Row;
+  memberLimit?: (guild: string) => number;
   ensureMembershipLimit?: (uid: string) => void;
 };
+const reservedAliases = new Set([
+  "api",
+  "ws",
+  "settings",
+  "vendor",
+  "upload",
+  "login",
+  "register",
+  "admin",
+  "health",
+  "app-icon",
+  "favicon",
+  "robots",
+  "assets",
+]);
 export function createInvitations(ctx: Context) {
   const { db, one, all, run, json, response, fail, changed, audit, user } = ctx;
   function member(guild: string, uid: string) {
@@ -108,7 +126,7 @@ export function createInvitations(ctx: Context) {
     run("UPDATE invitation_grants SET revoked=1 WHERE guild=?", guild);
     saveCertificate(guild);
   }
-  function state(guild: string) {
+  function state(guild: string, sender?: string) {
     const now = Date.now();
     const activeInvites = all(
       "SELECT grant_data,signature FROM invitation_grants WHERE guild=? AND revoked=0",
@@ -119,7 +137,36 @@ export function createInvitations(ctx: Context) {
         signature: row.signature,
       }))
       .filter((row) => row.grant.expires === null || row.grant.expires > now);
-    return { certificate: certificate(guild), activeInvites };
+    return {
+      certificate: certificate(guild),
+      activeInvites,
+      publicAlias:
+        one("SELECT slug FROM public_invite_aliases WHERE guild=?", guild)
+          ?.slug ?? null,
+      historyCredentialVersion: sender
+        ? [
+            ...all(
+              "SELECT COUNT(*) AS n,COALESCE(MAX(rowid),0) AS revision FROM history_credentials WHERE guild=? AND user=?",
+              guild,
+              sender,
+            ),
+            ...all(
+              "SELECT COUNT(*) AS n,COALESCE(MAX(rowid),0) AS revision FROM history_deliveries WHERE guild=? AND user=?",
+              guild,
+              sender,
+            ),
+          ]
+            .map((r) => `${r.n}:${r.revision}`)
+            .join("/")
+        : null,
+      historyRecipients: sender
+        ? all(
+            "SELECT m.user FROM members m WHERE m.guild=? AND NOT EXISTS(SELECT 1 FROM history_credentials h WHERE h.guild=m.guild AND h.user=m.user) AND NOT EXISTS(SELECT 1 FROM history_deliveries h WHERE h.guild=m.guild AND h.user=m.user AND h.sender=?)",
+            guild,
+            sender,
+          ).map((r) => r.user)
+        : [],
+    };
   }
   function usable(id: string): Row & { grant: any; g: Row } {
     const row = one(
@@ -169,6 +216,7 @@ export function createInvitations(ctx: Context) {
               maxUses: grant.maxUses,
               uses: row.uses,
               approval: grant.approval,
+              publicAlias: grant.publicAlias ?? null,
             };
           }),
         );
@@ -206,6 +254,37 @@ export function createInvitations(ctx: Context) {
             body.signature,
             JSON.stringify(body.snapshot),
           );
+          if (grant.publicAlias) {
+            if (
+              grant.approval ||
+              grant.maxUses ||
+              grant.expires !== null ||
+              reservedAliases.has(grant.publicAlias)
+            )
+              return fail(400, "カスタム招待リンクの設定が不正です");
+            const taken = one(
+              "SELECT guild FROM public_invite_aliases WHERE slug=?",
+              grant.publicAlias,
+            );
+            if (taken && taken.guild !== guild)
+              return fail(409, "このURLは使用されています");
+            const oldAlias = one(
+              "SELECT invite FROM public_invite_aliases WHERE guild=?",
+              guild,
+            );
+            if (oldAlias)
+              run(
+                "UPDATE invitation_grants SET revoked=1 WHERE id=?",
+                oldAlias.invite,
+              );
+            run("DELETE FROM public_invite_aliases WHERE guild=?", guild);
+            run(
+              "INSERT INTO public_invite_aliases VALUES(?,?,?)",
+              grant.publicAlias,
+              guild,
+              grant.id,
+            );
+          }
           audit(guild, uid, "invite.create");
         })();
         changed(guild);
@@ -304,9 +383,12 @@ export function createInvitations(ctx: Context) {
             return fail(409, "参加できるサーバーは30個までです");
           if (
             (one("SELECT COUNT(*) AS n FROM members WHERE guild=?", row.guild)
-              ?.n ?? 0) >= 100
+              ?.n ?? 0) >= (ctx.memberLimit?.(row.guild) ?? 100)
           )
-            return fail(409, "メンバーは100人までです");
+            return fail(
+              409,
+              `メンバーは${ctx.memberLimit?.(row.guild) ?? 100}人までです`,
+            );
           run("UPDATE invitation_grants SET uses=uses+1 WHERE id=?", id);
           if (approval) run("INSERT INTO requests VALUES(?,?)", row.guild, uid);
           else {
@@ -335,7 +417,15 @@ export function createInvitations(ctx: Context) {
             "SELECT envelope FROM history_credentials WHERE guild=? AND user=?",
             guild,
             uid,
-          ).map((row) => JSON.parse(row.envelope)),
+          )
+            .concat(
+              all(
+                "SELECT envelope FROM history_deliveries WHERE guild=? AND user=? ORDER BY rowid DESC LIMIT 10",
+                guild,
+                uid,
+              ),
+            )
+            .map((row) => JSON.parse(row.envelope)),
         );
       }
       if (method === "POST") {
@@ -351,8 +441,25 @@ export function createInvitations(ctx: Context) {
             return fail(403, "このサーバーには参加できない");
         };
         authorize();
-        const body = object(await json(req, 8 * 1024 * 1024)),
-          envelope = body.envelope;
+        const body = object(await json(req, 12 * 1024 * 1024)),
+          envelope = body.envelope,
+          target = body.target ?? uid;
+        const grantRow = one(
+          "SELECT grant_data FROM invitation_grants WHERE id=? AND guild=?",
+          body.invite,
+          guild,
+        );
+        if (
+          target !== uid &&
+          (!grantRow ||
+            !JSON.parse(grantRow.grant_data).publicAlias ||
+            !one(
+              "SELECT 1 FROM members WHERE guild=? AND user=?",
+              guild,
+              target,
+            ))
+        )
+          return fail(403, "履歴の共有先が不正です");
         if (
           typeof body.invite !== "string" ||
           !one(
@@ -362,23 +469,67 @@ export function createInvitations(ctx: Context) {
           ) ||
           envelope?.header?.room !== "history:" + guild ||
           envelope.header.author !== uid ||
-          canonical(Object.keys(envelope.boxes ?? {})) !== canonical([uid])
+          canonical(Object.keys(envelope.boxes ?? {})) !== canonical([target])
         )
           return fail(400, "履歴の鍵が不正");
         const { signature, ...payload } = envelope;
         if (!(await verify(payload, signature, user(uid).keys)))
           return fail(400, "履歴の署名が不正");
         authorize();
+        if (target !== uid) {
+          if (
+            !one(
+              "SELECT 1 FROM members WHERE guild=? AND user=?",
+              guild,
+              uid,
+            ) ||
+            !one(
+              "SELECT 1 FROM members WHERE guild=? AND user=?",
+              guild,
+              target,
+            )
+          )
+            return fail(403, "履歴の共有先が不正です");
+          run(
+            "INSERT OR IGNORE INTO history_deliveries VALUES(?,?,?,?,?)",
+            guild,
+            target,
+            body.invite,
+            uid,
+            JSON.stringify(envelope),
+          );
+          changed(guild);
+          return response({ ok: true });
+        }
         run(
           "INSERT INTO history_credentials VALUES(?,?,?,?) ON CONFLICT(guild,user,invite) DO UPDATE SET envelope=excluded.envelope",
           guild,
-          uid,
+          target,
           body.invite,
           JSON.stringify(envelope),
         );
+        changed(guild);
         return response({ ok: true });
       }
     }
   }
-  return { handle, state, certificate, rosterChanged, appendChange };
+  function resolveAlias(slug: string) {
+    const row = one(
+      "SELECT invite FROM public_invite_aliases WHERE slug=?",
+      slug,
+    );
+    if (!row) return fail(404, "招待リンクが見つかりません");
+    const invite = usable(row.invite);
+    if (invite.grant.publicAlias !== slug || invite.grant.approval)
+      return fail(403, "招待リンクが無効です");
+    return { id: row.invite, publicAlias: slug };
+  }
+  return {
+    resolveAlias,
+    handle,
+    state,
+    certificate,
+    rosterChanged,
+    appendChange,
+  };
 }

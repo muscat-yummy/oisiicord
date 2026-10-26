@@ -117,6 +117,7 @@ export function createLifecycle(ctx: Context) {
     run("DELETE FROM members WHERE guild=? AND user=?", guild, id);
     run("DELETE FROM requests WHERE guild=? AND user=?", guild, id);
     run("DELETE FROM history_credentials WHERE guild=? AND user=?", guild, id);
+    run("DELETE FROM history_deliveries WHERE guild=? AND user=?", guild, id);
     ctx.removeRoles(guild, id);
     // A departing member may still possess invite secrets: stop all old history-key deliveries.
     run("UPDATE invitation_grants SET revoked=1 WHERE guild=?", guild);
@@ -237,6 +238,7 @@ export function createLifecycle(ctx: Context) {
         for (const gid of owned) run("DELETE FROM guilds WHERE id=?", gid);
         run("DELETE FROM requests WHERE user=?", id);
         run("DELETE FROM history_credentials WHERE user=?", id);
+        run("DELETE FROM history_deliveries WHERE user=?", id);
         run("DELETE FROM profiles WHERE user=?", id);
         run("DELETE FROM user_blocks WHERE owner=? OR target=?", id, id);
         run("DELETE FROM sessions WHERE user=?", id);

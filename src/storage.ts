@@ -19,6 +19,7 @@ const settingKeys = [
   "PORT",
   "HOST",
   "APP_ORIGIN",
+  "TRUST_PROXY",
   "DATABASE_PATH",
   "ICE_SERVERS",
 ] as const;

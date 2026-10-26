@@ -594,3 +594,40 @@ body:has(#workspace:not([hidden])) {
     transform: rotate(180deg);
   }
 }
+
+/* Bound both grid tracks: settings content scrolls, the dialog and page do not. */
+html:has(#workspace:not([hidden])),
+body:has(#workspace:not([hidden])) {
+  overflow: hidden;
+  overscroll-behavior: none;
+}
+body:has(#workspace:not([hidden])) {
+  position: fixed;
+  inset: 0;
+  width: 100%;
+  min-height: 0;
+}
+.settings-dialog[open] {
+  overflow: hidden;
+  overscroll-behavior: none;
+  max-width: 100%;
+}
+.settings-layout {
+  grid-template-rows: minmax(0, 1fr);
+  min-height: 0;
+  overflow: hidden;
+}
+.settings-navigation,
+.settings-content {
+  min-height: 0;
+  max-height: 100%;
+}
+@media (max-width: 780px) {
+  .settings-layout {
+    grid-template-rows: auto minmax(0, 1fr);
+  }
+}
+.link-confirmation-url {
+  unicode-bidi: plaintext;
+  overflow-wrap: anywhere;
+}

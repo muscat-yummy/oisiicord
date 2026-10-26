@@ -1,3 +1,4 @@
+import { COMMERCE_SCHEMA } from "./commerce";
 import { Database } from "bun:sqlite";
 import { existsSync, mkdirSync } from "node:fs";
 import { backupDatabase } from "./storage";
@@ -5,7 +6,7 @@ import { dirname } from "node:path";
 import { COMMUNITY_SCHEMA } from "./community";
 import { INVITATION_SCHEMA } from "./invitations";
 import { LIFECYCLE_SCHEMA } from "./lifecycle";
-export const SCHEMA_VERSION = 3;
+export const SCHEMA_VERSION = 4;
 export function database(path: string, backupDir?: string) {
   const existing = path !== ":memory:" && existsSync(path);
   if (path !== ":memory:") mkdirSync(dirname(path), { recursive: true });
@@ -63,6 +64,7 @@ export function database(path: string, backupDir?: string) {
       db.exec(COMMUNITY_SCHEMA);
       db.exec(INVITATION_SCHEMA);
       db.exec(LIFECYCLE_SCHEMA);
+      db.exec(COMMERCE_SCHEMA);
       db.exec("CREATE INDEX IF NOT EXISTS guilds_owner ON guilds(owner)");
       if (db.query("PRAGMA foreign_key_check").all().length)
         throw Error("DBの参照整合性を確認できない");

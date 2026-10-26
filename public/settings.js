@@ -123,6 +123,7 @@ export function createSettings(ctx) {
       mode === "user"
         ? [
             ["account", "マイアカウント", "users"],
+            ["store", "Plus・購入履歴", "plusCircle"],
             ["profile", "プロフィール", "image"],
             ["appearance", "表示", "palette"],
             ["voice", "音声・ビデオ", "volume"],
@@ -143,6 +144,7 @@ export function createSettings(ctx) {
             ["rules", "ルール", "book"],
             ["channels", "チャンネル", "hash"],
             ["invites", "招待", "link"],
+            ["boost", "サーバーブースト", "plusCircle"],
             ["audit", "操作履歴", "history"],
             ["info", "サーバー情報", "info"],
           ];
@@ -239,7 +241,123 @@ export function createSettings(ctx) {
     if (!shell.open) shell.showModal();
     navigate(initial);
   }
+  async function storePage(area, guild = null) {
+    area.append(heading(guild ? "サーバーブースト" : "Oisiicord Plus"));
+    const store = await api("/store"),
+      product = store.products.find((p) => p.id === (guild ? "boost" : "plus"));
+    area.append(
+      n(
+        "ul",
+        {},
+        ...(guild
+          ? ["カスタム絵文字300個", "チャンネル300個", "メンバー300人"]
+          : [
+              "参加サーバー100個",
+              "参加中のサーバーのカスタム絵文字をどこでも使用",
+            ]
+        ).map((text) => n("li", {}, text)),
+      ),
+    );
+    if (guild?.boosted)
+      area.append(
+        n(
+          "p",
+          {},
+          "有効期限: " + new Date(guild.boostExpires).toLocaleString("ja-JP"),
+        ),
+      );
+    if (!guild && store.plus) area.append(n("p", {}, "購入済み"));
+    else if (!product) area.append(n("p", {}, "購入受付は準備中です"));
+    else {
+      area.append(
+        n(
+          "p",
+          {},
+          product.amount +
+            " LTC · " +
+            (product.permanent ? "買い切り" : product.days + "日間"),
+        ),
+      );
+      area.append(
+        b(
+          "LTCで購入",
+          async () => {
+            const order = await api("/store/orders", {
+              product: product.id,
+              ...(guild ? { guild: guild.id } : {}),
+            });
+            ctx.confirmLink(order.checkout);
+            await navigate(guild ? "boost" : "store");
+          },
+          "primary",
+        ),
+      );
+    }
+    const pending = store.orders
+      .filter(
+        (order) =>
+          !order.granted && ["New", "Processing"].includes(order.status),
+      )
+      .slice(0, 2);
+    if (pending.length) {
+      let polling = false;
+      const timer = setInterval(async () => {
+        if (polling || !shell?.open) return;
+        polling = true;
+        try {
+          let updated = false;
+          for (const order of pending) {
+            const next = await api("/store/orders/" + order.id);
+            if (next.granted || next.status !== order.status) updated = true;
+          }
+          if (updated) {
+            await ctx.refresh();
+            await navigate(guild ? "boost" : "store");
+          }
+        } catch {
+        } finally {
+          polling = false;
+        }
+      }, 20000);
+      cleanup = () => clearInterval(timer);
+    }
+    const statuses = {
+      New: "入金待ち",
+      Processing: "入金確認中",
+      Expired: "期限切れ",
+      Invalid: "無効",
+      Settled: "反映済み",
+      Creating: "作成中",
+      Failed: "作成失敗",
+    };
+    area.append(heading("購入履歴"));
+    for (const order of store.orders.filter(
+      (o) => !guild || o.guild === guild.id,
+    )) {
+      area.append(
+        row(
+          order.product === "plus" ? "Plus" : "サーバーブースト",
+          order.amount + " LTC · " + (statuses[order.status] ?? order.status),
+          [
+            ...(order.checkout && !order.granted
+              ? [b("支払い画面", () => ctx.confirmLink(order.checkout))]
+              : []),
+            ...(!order.granted
+              ? [
+                  b("入金を確認", async () => {
+                    const result = await api("/store/orders/" + order.id);
+                    if (result.granted) await ctx.refresh();
+                    await navigate(guild ? "boost" : "store");
+                  }),
+                ]
+              : []),
+          ],
+        ),
+      );
+    }
+  }
   async function userPage(area, selected) {
+    if (selected === "store") return storePage(area);
     const state = ctx.getState(),
       me = state.me,
       profile = me.profile ?? {};
@@ -815,6 +933,7 @@ export function createSettings(ctx) {
     return result;
   }
   async function serverPage(area, selected) {
+    if (selected === "boost") return storePage(area, ctx.getGuild());
     const g = ctx.getGuild(),
       owner = g.owner === ctx.getMe().id,
       profile = g.profile ?? {};
@@ -1612,7 +1731,13 @@ export function createSettings(ctx) {
           full = invite.maxUses && invite.uses >= invite.maxUses;
         area.append(
           row(
-            expired ? "期限切れ" : full ? "利用上限に到達" : "招待リンク",
+            expired
+              ? "期限切れ"
+              : full
+                ? "利用上限に到達"
+                : invite.publicAlias
+                  ? location.origin + "/" + invite.publicAlias
+                  : "招待リンク",
             (invite.expires
               ? new Date(invite.expires).toLocaleString("ja-JP")
               : "期限なし") +
