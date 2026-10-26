@@ -25,7 +25,11 @@ test("2GiB boundary uploads 128 independently encrypted bounded parts sequential
     },
   };
   const result = await uploadAttachment(file, {
+    maximum: MAX_FILE_SIZE,
     request: async (_path: string, options: any) => {
+      if (_path === "/api/file-transfers")
+        return Response.json({ id: "boundary_transfer", size: file.size });
+      if (options.method === "DELETE") return Response.json({ ok: true });
       active++;
       max = Math.max(max, active);
       count++;
@@ -52,7 +56,10 @@ test("2GiB boundary uploads 128 independently encrypted bounded parts sequential
     attachmentParts({ ...result, size: MAX_FILE_SIZE + 1 }),
   ).toThrow();
   await expect(
-    uploadAttachment({ ...file, size: MAX_FILE_SIZE + 1 }),
+    uploadAttachment(
+      { ...file, size: MAX_FILE_SIZE + 1 },
+      { maximum: MAX_FILE_SIZE },
+    ),
   ).rejects.toThrow("2048 MiB");
   let deleted = 0;
   await removeAttachment(result, async () => {
@@ -99,6 +106,10 @@ test("failed upload removes completed parts, small attachments stay compatible a
   await expect(
     uploadAttachment(large, {
       request: async (_path: string, options: any) => {
+        if (_path === "/api/file-transfers")
+          return Response.json({ id: "failure_transfer", size: large.size });
+        if (_path.startsWith("/api/file-transfers/"))
+          return Response.json({ ok: true });
         if (options.method === "DELETE") {
           deletes++;
           return Response.json({ ok: true });

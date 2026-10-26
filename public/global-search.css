@@ -1,0 +1,209 @@
+.global-search-dialog[open] {
+  display: grid;
+  grid-template-rows: auto auto auto minmax(0, 1fr) auto;
+  gap: 14px;
+  width: min(
+    960px,
+    calc(100dvw - 32px),
+    calc(var(--viewport-width, 100vw) - 32px)
+  );
+  height: min(
+    780px,
+    calc(100dvh - 32px),
+    calc(var(--viewport-height, 100dvh) - 32px)
+  );
+  max-width: calc(100dvw - 32px);
+  max-height: calc(100dvh - 32px);
+  position: fixed;
+  margin: 0;
+  right: auto;
+  bottom: auto;
+  translate: -50% -50%;
+  overflow: hidden;
+  padding: 24px;
+  box-sizing: border-box;
+  top: calc(
+    var(--viewport-top, 0px) + min(100dvh, var(--viewport-height, 100dvh)) / 2
+  );
+  left: calc(
+    var(--viewport-left, 0px) + min(100dvw, var(--viewport-width, 100dvw)) / 2
+  );
+  color: var(--text);
+  background: var(--main);
+  border: 1px solid var(--line);
+  border-radius: 14px;
+}
+.global-search-dialog header,
+.global-search-dialog footer,
+.global-search-dialog footer > div {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  min-width: 0;
+  margin: 0;
+}
+.global-search-dialog h2 {
+  margin: 0;
+  font-size: 22px;
+}
+.global-search-dialog form {
+  display: grid;
+  gap: 10px;
+  min-width: 0;
+  max-height: min(
+    360px,
+    max(60px, calc(min(100dvh, var(--viewport-height, 100dvh)) - 240px))
+  );
+  overflow: auto;
+  overscroll-behavior: contain;
+}
+.global-search-fields {
+  border: 0;
+  padding: 0;
+  margin: 0;
+  min-width: 0;
+  display: grid;
+  gap: 12px;
+}
+.global-search-fields label {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  min-width: 0;
+  font-size: 12px;
+  color: var(--muted);
+  margin: 0;
+}
+.global-search-query {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(180px, 0.7fr);
+  gap: 12px;
+  align-items: end;
+}
+.global-search-query > input {
+  height: 40px;
+}
+.global-search-filters {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 12px;
+}
+.global-search-fields input,
+.global-search-fields select {
+  width: 100%;
+  min-width: 0;
+  box-sizing: border-box;
+}
+.global-search-options,
+.global-search-actions {
+  display: flex;
+  gap: 18px;
+  align-items: center;
+  flex-wrap: wrap;
+}
+.global-search-options label {
+  flex-direction: row-reverse;
+  align-items: center;
+  gap: 8px;
+}
+.global-search-options input {
+  width: 16px;
+  height: 16px;
+}
+.global-search-status {
+  font-size: 13px;
+  color: var(--muted);
+  margin: 0;
+  min-height: 20px;
+  overflow-wrap: anywhere;
+}
+.search-results {
+  overflow: auto;
+  min-height: 0;
+  overscroll-behavior: contain;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.search-result {
+  text-align: left;
+  flex: none;
+  min-width: 0;
+  width: 100%;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 14px;
+  background: var(--side);
+  color: var(--text);
+  white-space: normal;
+}
+.search-result:hover {
+  border-color: var(--accent);
+}
+.search-result-meta {
+  display: block;
+  font-size: 12px;
+  color: var(--muted);
+  overflow-wrap: anywhere;
+  margin-bottom: 8px;
+}
+.search-result pre {
+  font: inherit;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+  margin: 0;
+  display: -webkit-box;
+  -webkit-line-clamp: 6;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+.search-result small {
+  display: block;
+  margin-top: 8px;
+  color: var(--muted);
+  overflow-wrap: anywhere;
+}
+@media (max-width: 600px) {
+  .global-search-dialog[open] {
+    width: min(100dvw, var(--viewport-width, 100dvw));
+    height: min(100dvh, var(--viewport-height, 100dvh));
+    max-width: 100dvw;
+    max-height: 100dvh;
+    border-radius: 0;
+    padding: max(16px, env(safe-area-inset-top))
+      max(12px, env(safe-area-inset-right))
+      max(12px, env(safe-area-inset-bottom))
+      max(12px, env(safe-area-inset-left));
+    gap: 10px;
+  }
+  .global-search-query {
+    grid-template-columns: 1fr;
+  }
+  .global-search-filters {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 8px;
+  }
+  .global-search-dialog footer {
+    flex-wrap: wrap;
+  }
+  .global-search-fields {
+    gap: 8px;
+  }
+}
+
+.global-search-dialog footer select {
+  width: auto;
+  min-width: 120px;
+}
+.global-search-dialog footer button {
+  white-space: nowrap;
+}
+
+.global-search-actions {
+  position: sticky;
+  bottom: 0;
+  background: var(--main);
+  padding: 4px 0;
+}

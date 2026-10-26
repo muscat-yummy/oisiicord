@@ -1,5 +1,6 @@
 import { lstatSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
+import { STANDARD_FILE_SIZE, PLUS_FILE_SIZE } from "./file-transfers";
 export const COMMERCE_SCHEMA = `
 CREATE TABLE IF NOT EXISTS store_orders(id TEXT PRIMARY KEY,user TEXT NOT NULL REFERENCES users(id),product TEXT NOT NULL,guild TEXT REFERENCES guilds(id) ON DELETE SET NULL,amount TEXT NOT NULL,days INTEGER NOT NULL,provider TEXT NOT NULL,store TEXT NOT NULL,invoice TEXT UNIQUE,status TEXT NOT NULL,checkout TEXT,created INTEGER NOT NULL,granted INTEGER);
 CREATE TABLE IF NOT EXISTS user_upgrades(user TEXT PRIMARY KEY REFERENCES users(id),order_id TEXT NOT NULL REFERENCES store_orders(id));
@@ -110,6 +111,7 @@ export function createCommerce(
       plus: plus(uid),
       guildLimit: plus(uid) ? 100 : 30,
       globalEmojis: plus(uid),
+      maxFileSize: plus(uid) ? PLUS_FILE_SIZE : STANDARD_FILE_SIZE,
     };
   }
   function guildBenefits(guild: string) {

@@ -9,6 +9,7 @@ import { createBranding } from "./branding";
 import { createBetaSettings, matchesBetaCode } from "./beta";
 import { createCommerce } from "./commerce";
 import { RateLimiter } from "./rate-limit";
+import { FileTransfers } from "./file-transfers";
 import { canonical, verify, fingerprint } from "../public/crypto.js";
 import { resolve, join } from "node:path";
 
@@ -91,6 +92,7 @@ export function createApp(
   }
   const sockets = new Set<Bun.ServerWebSocket<WSData>>();
   const limiter = new RateLimiter();
+  const fileTransfers = new FileTransfers();
   const transfers = new Map<string, number>();
   let activeTransfers = 0;
   async function transfer<T>(
@@ -128,6 +130,7 @@ export function createApp(
   const maintenance = setInterval(() => {
     const now = Date.now();
     limiter.prune();
+    fileTransfers.prune();
     run("DELETE FROM sessions WHERE expires < ?", now);
     for (const ws of sockets)
       if (!sessionValid(ws.data)) ws.close(4001, "Session expired");
@@ -1327,13 +1330,53 @@ export function createApp(
         return response({ ok: true });
       }
     }
+    if (p === "/api/file-transfers" && method === "POST") {
+      limit("file-transfer:" + uid, 20);
+      const body = await json(req);
+      try {
+        return response(
+          fileTransfers.create(
+            uid,
+            body.size,
+            commerce.benefits(uid).maxFileSize,
+          ),
+        );
+      } catch (error: any) {
+        return fail(400, error.message);
+      }
+    }
+    const cancelledTransfer = p.match(/^\/api\/file-transfers\/([\w-]+)$/);
+    if (cancelledTransfer && method === "DELETE") {
+      fileTransfers.cancel(uid, cancelledTransfer[1]);
+      return response({ ok: true });
+    }
     if (p === "/api/files" && method === "POST") {
       limit("upload:" + uid, 64, 60000);
       if (req.headers.get("content-type") !== "application/octet-stream")
         fail(415, "暗号化バイナリが必要");
       return transfer(uid, async () => {
         const data = await bounded(req, 25 * 1024 * 1024 + 16);
-        return response(await files.upload(data));
+        const id = req.headers.get("X-File-Transfer");
+        let finish: ((success: boolean) => void) | undefined;
+        if (id) {
+          try {
+            finish = fileTransfers.reserve(
+              uid,
+              id,
+              Number(req.headers.get("X-File-Offset")),
+              data.length,
+            );
+          } catch (error: any) {
+            return fail(400, error.message);
+          }
+        }
+        try {
+          const result = await files.upload(data);
+          finish?.(true);
+          return response(result);
+        } finally {
+          finish?.(false);
+        }
       });
     }
     m = p.match(/^\/api\/files\/([a-zA-Z0-9_-]+)$/);
@@ -1401,6 +1444,10 @@ export function createApp(
         const allowed: Record<string, string> = {
           "/": "index.html",
           "/app.js": "app.js",
+          "/global-search.js": "global-search.js",
+          "/global-search.css": "global-search.css",
+          "/search-model.js": "search-model.js",
+          "/search-worker.js": "search-worker.js",
           "/crypto.js": "crypto.js",
           "/attachments.js": "attachments.js",
           "/download-worker.js": "download-worker.js",

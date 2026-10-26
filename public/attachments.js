@@ -1,5 +1,6 @@
 import * as C from "./crypto.js";
 /** @typedef {(path: string, options?: RequestInit) => Promise<Response>} FileRequest */
+export const STANDARD_FILE_SIZE = 1024 * 1024 * 1024;
 export const MAX_FILE_SIZE = 2048 * 1024 * 1024;
 export const CHUNK_SIZE = 16 * 1024 * 1024;
 const SINGLE_SIZE = 25 * 1024 * 1024;
@@ -66,17 +67,42 @@ export async function removeAttachment(file, request = fetch) {
   }
   if (failed) throw Error("外部APIで添付の削除に失敗した");
 }
-/** @param {{request?: FileRequest, progress?: (bytes: number, total: number) => void}} options */
+/** @param {{request?: FileRequest, progress?: (bytes: number, total: number) => void, maximum?: number}} options */
 export async function uploadAttachment(file, options = {}) {
-  const { request = fetch, progress = () => {} } = options;
+  const {
+    request = fetch,
+    progress = () => {},
+    maximum = STANDARD_FILE_SIZE,
+  } = options;
   if (
     !Number.isSafeInteger(file.size) ||
     file.size < 0 ||
-    file.size > MAX_FILE_SIZE
+    file.size > Math.min(maximum, MAX_FILE_SIZE)
   )
-    throw Error("1ファイル2048 MiBまで");
+    throw Error(
+      `1ファイル${Math.min(maximum, MAX_FILE_SIZE) / 1024 / 1024} MiBまでです`,
+    );
   const chunks = [];
   const split = file.size > SINGLE_SIZE;
+  let transfer = null;
+  if (split) {
+    const response = await fileRequest(
+      "/api/file-transfers",
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ size: file.size }),
+      },
+      request,
+    );
+    if (!response.ok) {
+      const result = await response.json().catch(() => ({}));
+      throw Error(result.error ?? "添付の送信を開始できない");
+    }
+    transfer = await response.json();
+    if (!/^[\w-]{1,100}$/.test(transfer.id) || transfer.size !== file.size)
+      throw Error("添付APIの応答が不正");
+  }
   try {
     for (
       let offset = 0;
@@ -93,7 +119,15 @@ export async function uploadAttachment(file, options = {}) {
         "/api/files",
         {
           method: "POST",
-          headers: { "Content-Type": "application/octet-stream" },
+          headers: {
+            "Content-Type": "application/octet-stream",
+            ...(transfer
+              ? {
+                  "X-File-Transfer": transfer.id,
+                  "X-File-Offset": String(offset),
+                }
+              : {}),
+          },
           body: ciphertext,
         },
         request,
@@ -120,6 +154,11 @@ export async function uploadAttachment(file, options = {}) {
     for (const chunk of chunks)
       await removeAttachment(chunk, request).catch(() => {});
     throw error;
+  } finally {
+    if (transfer)
+      await request("/api/file-transfers/" + transfer.id, {
+        method: "DELETE",
+      }).catch(() => {});
   }
 }
 /** @param {FileRequest} request */

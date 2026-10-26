@@ -18,6 +18,7 @@
     <link rel="stylesheet" href="/productivity.css" />
     <link rel="stylesheet" href="/developer-ui.css" />
     <link rel="stylesheet" href="/responsive.css" />
+    <link rel="stylesheet" href="/global-search.css" />
     <script type="module" src="/app.js"></script>
   </head>
   <body>
@@ -182,7 +183,13 @@
               type="search"
               aria-label="この会話を検索"
               placeholder="検索"
-            />
+              title="Enterで横断検索"
+            /><button
+              id="global-search"
+              class="icon-button"
+              title="横断検索"
+              aria-label="横断検索"
+            ></button>
           </div>
         </header>
         <div id="mobile-toolbar" hidden></div>

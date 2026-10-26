@@ -30,7 +30,8 @@
     "test:responsive": "bun tests/responsive-interface.mjs",
     "test:motion": "bun tests/panel-motion-interface.mjs",
     "test:feedback": "bun tests/feedback-interface.mjs",
-    "test:large-files": "bun tests/large-files-interface.mjs"
+    "test:large-files": "bun tests/large-files-interface.mjs",
+    "test:search": "bun tests/search-interface.mjs"
   },
   "devDependencies": {
     "@types/bun": "^1.3.0",

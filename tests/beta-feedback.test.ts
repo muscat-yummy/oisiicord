@@ -316,6 +316,14 @@ test("LTC orders verify invoice ownership, exact amount, method and settlement b
         boost_days: 30,
       }),
     );
+    expect(
+      (await f.api(alice, "/file-transfers", { size: 1024 * 1024 * 1024 }))
+        .status,
+    ).toBe(200);
+    expect(
+      (await f.api(alice, "/file-transfers", { size: 1024 * 1024 * 1024 + 1 }))
+        .status,
+    ).toBe(400);
     const order = await f.api(alice, "/store/orders", { product: "plus" });
     expect(order.status).toBe(200);
     expect(order.body.status).toBe("New");
@@ -346,10 +354,19 @@ test("LTC orders verify invoice ownership, exact amount, method and settlement b
       plus: true,
       guildLimit: 100,
       globalEmojis: true,
+      maxFileSize: 2048 * 1024 * 1024,
     });
     expect(
       (await f.api(alice, "/store/orders/" + order.body.id)).body.status,
     ).toBe("Settled");
+    expect(
+      (await f.api(alice, "/file-transfers", { size: 2048 * 1024 * 1024 }))
+        .status,
+    ).toBe(200);
+    expect(
+      (await f.api(alice, "/file-transfers", { size: 2048 * 1024 * 1024 + 1 }))
+        .status,
+    ).toBe(400);
     const boost = await f.api(alice, "/store/orders", {
       product: "boost",
       guild: gid,

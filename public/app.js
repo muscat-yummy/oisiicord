@@ -1,6 +1,6 @@
 import * as C from "./crypto.js";
 import {
-  MAX_FILE_SIZE,
+  STANDARD_FILE_SIZE,
   uploadAttachment,
   removeAttachment,
   streamDownload,
@@ -19,6 +19,7 @@ import { createWorkspaceUI } from "./workspace-ui.js";
 import { createProductivity } from "./productivity.js";
 import { createMediaPreview } from "./media-preview.js";
 import { clearDeveloperCaches } from "./developer-ui.js";
+import { createGlobalSearch } from "./global-search.js";
 import { rememberLogin, restoreLogin, forgetLogin } from "./login-state.js";
 import { isMentioned, shouldNotify, createMentionInput } from "./mentions.js";
 const $ = (s) => document.querySelector(s);
@@ -148,6 +149,7 @@ async function api(path, body, method) {
   if (!res.ok) {
     const error = Error(out.error ?? "リクエスト失敗");
     error.status = res.status;
+    error.retryAfter = Number(res.headers.get("Retry-After"));
     throw error;
   }
   return out;
@@ -729,7 +731,7 @@ function renderHistoryStatus() {
     root.append(button("続きを読み込む", () => loadHistory(roomId)));
   root.hidden = !root.childNodes.length;
 }
-async function loadHistory(id) {
+async function loadHistory(id, { maxPages = 100, signal = null } = {}) {
   const identity = me;
   if (!identity) return;
   if (loading.has(id)) {
@@ -746,7 +748,8 @@ async function loadHistory(id) {
     histories.set(id, cache);
     cache.error = null;
     cache.more = false;
-    for (let page = 0; page < 100; page++) {
+    for (let page = 0; page < maxPages; page++) {
+      signal?.throwIfAborted();
       const batch = await api("/rooms/" + id + "/events?after=" + cache.cursor);
       if (me !== identity) return;
       cache.more = batch.length === 100;
@@ -817,7 +820,7 @@ async function loadHistory(id) {
   try {
     await task;
   } catch (error) {
-    if (me === identity && histories.has(id))
+    if (me === identity && histories.has(id) && error.name !== "AbortError")
       histories.get(id).error = error.message;
     throw error;
   } finally {
@@ -825,13 +828,18 @@ async function loadHistory(id) {
       loading.delete(id);
       if (roomId === id) renderHistoryStatus();
       const again = reloadHistory.delete(id);
-      if (again && me === identity && !histories.get(id)?.error)
+      if (
+        again &&
+        me === identity &&
+        !histories.get(id)?.error &&
+        !signal?.aborted
+      )
         await loadHistory(id);
     }
   }
 }
-function projection() {
-  const events = histories.get(roomId)?.events ?? [],
+function projection(id = roomId) {
+  const events = histories.get(id)?.events ?? [],
     messages = new Map();
   for (const e of events) {
     if (e.invalid) {
@@ -1296,6 +1304,7 @@ async function sendMessage(e) {
     for (const f of pendingFiles) {
       uploaded.push(
         await uploadAttachment(f, {
+          maximum: state.benefits?.maxFileSize ?? STANDARD_FILE_SIZE,
           progress: (bytes, total) => {
             uploadProgress.textContent =
               f.name +
@@ -2118,6 +2127,7 @@ async function logout(revoked = false) {
   const sessionId = me?.session;
   await productivity.flush().catch((error) => toast(error.message));
   productivity.reset();
+  globalSearch.reset();
   await leaveVoice();
   clearTimeout(reconnectTimer);
   clearInterval(heartbeat);
@@ -2787,6 +2797,117 @@ const communityUI = createCommunityUI({
   renderMessages,
   preferences,
 });
+const globalSearch = createGlobalSearch({
+  node,
+  button,
+  guard,
+  signedIn: () => !!me,
+  guildId: () => guildId,
+  roomId: () => roomId,
+  rooms: () =>
+    state
+      ? [
+          ...state.guilds.flatMap((g) =>
+            g.channels
+              .filter((r) => r.kind !== "voice")
+              .map((r) => ({ ...r, parent: g.name })),
+          ),
+          ...state.dms
+            .filter((r) => !r.users.some((id) => blockedContact(id)))
+            .map((r) => ({
+              ...r,
+              parent: "DM",
+              name:
+                users.get(r.users.find((id) => id !== me.id))?.display ?? "DM",
+            })),
+        ]
+      : [],
+  read: async (room, signal, progress) => {
+    let retries = 0;
+    do {
+      signal.throwIfAborted();
+      try {
+        await loadHistory(room.id, { maxPages: 1, signal });
+        retries = 0;
+      } catch (error) {
+        if (error.name === "AbortError" && !signal.aborted) {
+          await new Promise(requestAnimationFrame);
+          continue;
+        }
+        if (
+          error.status !== 429 ||
+          !error.retryAfter ||
+          error.retryAfter > 60 ||
+          ++retries > 5
+        )
+          throw error;
+        await new Promise((resolve, reject) => {
+          const abort = () => {
+            clearTimeout(timer);
+            reject(new DOMException("中止", "AbortError"));
+          };
+          const timer = setTimeout(() => {
+            signal.removeEventListener("abort", abort);
+            resolve();
+          }, error.retryAfter * 1000);
+          signal.addEventListener("abort", abort, { once: true });
+          if (signal.aborted) abort();
+        });
+        continue;
+      }
+      const cache = histories.get(room.id);
+      if (!cache) throw new DOMException("中止", "AbortError");
+      progress(cache.events.length);
+      if (cache.events.length > 100000) {
+        const error = Error(
+          "検索対象が100000件を超えました。範囲を絞ってください",
+        );
+        error.searchLimit = true;
+        throw error;
+      }
+      if (!cache.more) break;
+    } while (!signal.aborted);
+    return projection(room.id).filter(
+      (m) => !m.invalid && !blockedUser(m.author),
+    );
+  },
+  jump: async (room, id) => {
+    const target =
+      state.dms.find((r) => r.id === room) ??
+      state.guilds.flatMap((g) => g.channels).find((r) => r.id === room);
+    if (!target) throw Error("この会話を開けません");
+    guildId = target.guild ?? null;
+    await selectRoom(room);
+    const el = document.querySelector(
+      '[data-message="' + CSS.escape(id) + '"]',
+    );
+    el?.scrollIntoView({
+      behavior: preferences().reducedMotion ? "instant" : "smooth",
+      block: "center",
+    });
+    el?.classList.add("message-jump-highlight");
+    setTimeout(() => el?.classList.remove("message-jump-highlight"), 1800);
+  },
+});
+$("#global-search").onclick = () => globalSearch.open($("#search").value);
+$("#search").onkeydown = (event) => {
+  if (event.key === "Enter") {
+    event.preventDefault();
+    globalSearch.open(event.currentTarget.value);
+  }
+};
+document.addEventListener("keydown", (event) => {
+  if (
+    (event.ctrlKey || event.metaKey) &&
+    event.shiftKey &&
+    event.code === "KeyF" &&
+    me &&
+    !document.querySelector("dialog[open]")
+  ) {
+    event.preventDefault();
+    globalSearch.open();
+  }
+});
 const workspaceUI = createWorkspaceUI({
   node,
   button,
@@ -2879,6 +3000,7 @@ for (const [id, name, label] of [
   ["mobile-channels", "menu", "チャンネルを表示"],
   ["call", "phone", "音声通話"],
   ["pins", "pin", "ピン留め"],
+  ["global-search", "search", "横断検索"],
   ["personal-tools", "notebook", "メモ・定型文"],
   ["toggle-members", "users", "メンバー"],
   ["attach", "plusCircle", "ファイルを添付"],
@@ -3124,7 +3246,10 @@ $("#file-input").onchange = () =>
     const files = [...$("#file-input").files];
     if (attachments.length + files.length > 5) throw Error("添付は5個まで");
     for (const f of files)
-      if (f.size > MAX_FILE_SIZE) throw Error("1ファイル2048 MiBまで");
+      if (f.size > (state.benefits?.maxFileSize ?? STANDARD_FILE_SIZE))
+        throw Error(
+          `1ファイル${(state.benefits?.maxFileSize ?? STANDARD_FILE_SIZE) / 1024 / 1024} MiBまでです`,
+        );
     attachments.push(...files);
     $("#file-input").value = "";
     renderAttachments();
@@ -3190,6 +3315,7 @@ const toolbarControls = [
   $("#personal-tools"),
   $("#pins"),
   $("#search"),
+  $("#global-search"),
 ];
 let toolbarOpen = false,
   toolbarMotion = null;
